@@ -44,3 +44,18 @@ services:
     environment:
       - PROXY_USER=${SOCKS5_USER:-tguser}
       - PROXY_PASSWORD=${SOCKS5_PASS:-changeme}
+
+  amnezia-awg:
+    image: amneziavpn/amneziawg-go:latest
+    container_name: combain-awg
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - /etc/amnezia/amneziawg:/opt/amnezia/awg
+    entrypoint: ["/bin/sh", "-c", "awg-quick down /opt/amnezia/awg/awg0.conf 2>/dev/null || true; awg-quick up /opt/amnezia/awg/awg0.conf && tail -f /dev/null"]
