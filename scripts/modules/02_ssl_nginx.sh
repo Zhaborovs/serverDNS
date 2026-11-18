@@ -71,70 +71,83 @@ _prepare_cat_videos() {
             -exec cp -u {} "$cats_dir/" \; 2>/dev/null || true
     fi
 
-    # 2. Считаем текущее количество валидных медиа-котиков
-    local current_count
-    current_count="$(find "$cats_dir" -maxdepth 1 -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.gif" \) -size +15k 2>/dev/null | wc -l)"
-
-    if [[ "$current_count" -lt 10 ]]; then
-        log_info "Загрузка локального пака видео/анимаций котиков для рогалика (текущих: ${current_count}, цель: 10)..."
-        local ua="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
-
-        # Пробуем пару легких .webm роликов с Wikimedia Commons
-        local -A wiki_clips=(
-            ["cat_meow.webm"]="https://upload.wikimedia.org/wikipedia/commons/3/37/Cat_meowing_into_camera.webm"
-            ["cat_play.webm"]="https://upload.wikimedia.org/wikipedia/commons/e/e0/Ma%C4%8Dka_164113.webm"
-        )
-        for fname in "${!wiki_clips[@]}"; do
-            if [[ ! -s "${cats_dir}/${fname}" ]]; then
-                curl -4 -fsSL --connect-timeout 5 --max-time 15 -A "$ua" "${wiki_clips[$fname]}" -o "${cats_dir}/${fname}.tmp" 2>/dev/null || true
-                if [[ -s "${cats_dir}/${fname}.tmp" ]] && [[ "$(wc -c < "${cats_dir}/${fname}.tmp")" -gt 15000 ]]; then
-                    mv "${cats_dir}/${fname}.tmp" "${cats_dir}/${fname}"
-                else
-                    rm -f "${cats_dir}/${fname}.tmp"
-                fi
-            fi
-        done
-
-        # Добираем уникальные GIF-анимации с CATAAS (проверяя заголовок GIF8 и дедупликацию по md5)
-        local seen_hashes=""
-        for existing in "$cats_dir"/*; do
-            [[ -f "$existing" ]] && seen_hashes+="$(md5sum "$existing" 2>/dev/null | awk '{print $1}') "
-        done
-
-        local idx=1
-        local tries=0
-        while [[ "$(find "$cats_dir" -maxdepth 1 -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.gif" \) -size +15k 2>/dev/null | wc -l)" -lt 10 ]] && [[ "$tries" -lt 18 ]]; do
-            tries=$((tries + 1))
-            local target="${cats_dir}/cat_${idx}.gif"
-            while [[ -f "$target" ]]; do
-                idx=$((idx + 1))
-                target="${cats_dir}/cat_${idx}.gif"
-            done
-            local tmp_f="${target}.tmp"
-            curl -4 -fsSL --connect-timeout 4 --max-time 10 -A "$ua" "https://cataas.com/cat/gif?t=${tries}_$$" -o "$tmp_f" 2>/dev/null || true
-            if [[ -s "$tmp_f" ]] && [[ "$(wc -c < "$tmp_f")" -gt 15000 ]] && head -c 4 "$tmp_f" | grep -q "GIF8"; then
-                local h
-                h="$(md5sum "$tmp_f" | awk '{print $1}')"
-                if [[ "$seen_hashes" != *"$h"* ]]; then
-                    mv "$tmp_f" "$target"
-                    seen_hashes+="${h} "
-                    idx=$((idx + 1))
-                else
-                    rm -f "$tmp_f"
-                fi
-            else
-                rm -f "$tmp_f"
-            fi
-        done
-    fi
-
-    # 3. Генерируем manifest.json для фронтенда
-    python3 - "$cats_dir" <<'PYEOF'
-import json, sys
+    # 2. Загрузка недостающих анимаций до 12 штук через TheCatAPI + проверенный резервный список (через curl -4)
+    python3 - "$cats_dir" "12" <<'PYEOF'
+import hashlib, json, subprocess, sys
 from pathlib import Path
 
 cats_dir = Path(sys.argv[1])
+target_count = int(sys.argv[2])
 exts = {".mp4", ".webm", ".gif"}
+ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+
+FALLBACK_URLS = [
+    "https://cdn2.thecatapi.com/images/4ih.gif",
+    "https://cdn2.thecatapi.com/images/812.gif",
+    "https://cdn2.thecatapi.com/images/cul.gif",
+    "https://cdn2.thecatapi.com/images/891.gif",
+    "https://cdn2.thecatapi.com/images/2q1.gif",
+    "https://cdn2.thecatapi.com/images/5ei.gif",
+    "https://cdn2.thecatapi.com/images/MTczOTM3NQ.gif",
+    "https://cdn2.thecatapi.com/images/4h5.gif",
+    "https://cdn2.thecatapi.com/images/49f.gif",
+    "https://cdn2.thecatapi.com/images/48p.gif",
+    "https://cdn2.thecatapi.com/images/b7r.gif",
+    "https://cdn2.thecatapi.com/images/7t7.gif",
+    "https://cdn2.thecatapi.com/images/MTkzMTU5Nw.gif",
+    "https://cdn2.thecatapi.com/images/be4.gif",
+    "https://cdn2.thecatapi.com/images/1a6.gif",
+]
+
+existing = [p for p in cats_dir.iterdir() if p.is_file() and p.suffix.lower() in exts and p.stat().st_size > 15000]
+seen_hashes = {hashlib.md5(p.read_bytes()).hexdigest() for p in existing}
+
+if len(existing) < target_count:
+    print(f"[INFO] Загрузка пака анимаций котиков (текущих: {len(existing)}, цель: {target_count})...")
+    candidate_urls: list[str] = []
+    for _ in range(2):
+        res = subprocess.run(
+            ["curl", "-4", "-fsSL", "--connect-timeout", "4", "--max-time", "8", "-A", ua,
+             "https://api.thecatapi.com/v1/images/search?mime_types=gif&limit=10"],
+            capture_output=True, text=True, check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                for item in json.loads(res.stdout):
+                    u = item.get("url")
+                    if u and u not in candidate_urls:
+                        candidate_urls.append(u)
+            except Exception:
+                pass
+
+    for u in FALLBACK_URLS:
+        if u not in candidate_urls:
+            candidate_urls.append(u)
+
+    idx = 1
+    tmp_file = cats_dir / ".download.tmp"
+    for url in candidate_urls:
+        if len(existing) >= target_count:
+            break
+        while (cats_dir / f"cat_{idx:02d}.gif").exists():
+            idx += 1
+        tmp_file.unlink(missing_ok=True)
+        dl = subprocess.run(
+            ["curl", "-4", "-fsSL", "--connect-timeout", "4", "--max-time", "15", "-A", ua, url, "-o", str(tmp_file)],
+            capture_output=True, check=False,
+        )
+        if dl.returncode == 0 and tmp_file.exists():
+            data = tmp_file.read_bytes()
+            if 15000 < len(data) <= 5 * 1024 * 1024 and data[:4] == b"GIF8":
+                h = hashlib.md5(data).hexdigest()
+                if h not in seen_hashes:
+                    out_file = cats_dir / f"cat_{idx:02d}.gif"
+                    tmp_file.replace(out_file)
+                    existing.append(out_file)
+                    seen_hashes.add(h)
+                    idx += 1
+        tmp_file.unlink(missing_ok=True)
+
 files = sorted(
     f"/cats/{p.name}"
     for p in cats_dir.iterdir()
