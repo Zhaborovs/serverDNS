@@ -84,6 +84,9 @@ deploy_project_files() {
     fi
 
     # Приведение прав на исполняемые скрипты и очистка возможных CRLF
+    if [[ -d "${PROJECT_DIR}/.git" ]]; then
+        git -C "$PROJECT_DIR" config core.fileMode false || true
+    fi
     find "$PROJECT_DIR" -type f \( -name "*.sh" -o -name "*.py" \) -exec sed -i 's/\r$//' {} +
     chmod +x "${PROJECT_DIR}/install.sh" "${PROJECT_DIR}/combain.sh"
     find "${PROJECT_DIR}/scripts" -type f -name "*.sh" -exec chmod +x {} +

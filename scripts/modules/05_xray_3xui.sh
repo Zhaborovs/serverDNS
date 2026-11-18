@@ -72,6 +72,38 @@ _xray_ensure_keys() {
     log_ok "Ключи X25519 и UUID сгенерированы и сохранены в state.env."
 }
 
+mod_xray_apply_inbounds() {
+    state_load_silent
+    if [[ -z "${MAIN_CLIENT_UUID:-}" || -z "${REALITY_PRIVATE_KEY:-}" || -z "${REALITY_PUBLIC_KEY:-}" ]]; then
+        log_err "Не найдены ключи Reality/UUID в state.env. Сначала запустите mod_xray_3xui_setup."
+        return 1
+    fi
+
+    # Останавливаем контейнер на время безопасного патчинга БД x-ui.db
+    docker stop combain-3xui >/dev/null 2>&1 || true
+
+    python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" init-all \
+        --db /etc/x-ui/x-ui.db \
+        --panel-port "${XUI_INTERNAL_PORT}" \
+        --panel-path "${SECRET_PANEL_PATH}" \
+        --uuid "${MAIN_CLIENT_UUID}" \
+        --reality-sni "${REALITY_SNI}" \
+        --reality-private-key "${REALITY_PRIVATE_KEY}" \
+        --reality-public-key "${REALITY_PUBLIC_KEY}" \
+        --reality-short-id "${REALITY_SHORT_ID}" \
+        --reality-port "${XRAY_REALITY_INTERNAL_PORT:-20443}" \
+        --vk-xhttp-port "${XRAY_VK_XHTTP_PORT:-20444}" \
+        --vk-xhttp-path "${XHTTP_VK_PATH}" \
+        --vk-ws-port "${XRAY_VK_WS_PORT:-20445}" \
+        --vk-ws-path "${WS_VK_PATH}" \
+        --ya-xhttp-port "${XRAY_YA_XHTTP_PORT:-20446}" \
+        --ya-xhttp-path "${XHTTP_YA_PATH}" \
+        --ya-ws-port "${XRAY_YA_WS_PORT:-20447}" \
+        --ya-ws-path "${WS_YA_PATH}"
+
+    docker start combain-3xui >/dev/null
+}
+
 mod_xray_3xui_setup() {
     log_step "Модуль 05: Установка 3x-ui (latest), автоподбор Reality SNI и настройка CDN инбаундов"
     state_load_silent
@@ -108,29 +140,7 @@ mod_xray_3xui_setup() {
         -port "${XUI_INTERNAL_PORT}" \
         -webBasePath "/${SECRET_PANEL_PATH}/" >/dev/null 2>&1 || true
 
-    # Останавливаем контейнер на время безопасного патчинга БД x-ui.db
-    docker stop combain-3xui >/dev/null 2>&1 || true
-
-    python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" init-all \
-        --db /etc/x-ui/x-ui.db \
-        --panel-port "${XUI_INTERNAL_PORT}" \
-        --panel-path "${SECRET_PANEL_PATH}" \
-        --uuid "${MAIN_CLIENT_UUID}" \
-        --reality-sni "${REALITY_SNI}" \
-        --reality-private-key "${REALITY_PRIVATE_KEY}" \
-        --reality-public-key "${REALITY_PUBLIC_KEY}" \
-        --reality-short-id "${REALITY_SHORT_ID}" \
-        --reality-port "${XRAY_REALITY_INTERNAL_PORT:-20443}" \
-        --vk-xhttp-port "${XRAY_VK_XHTTP_PORT:-20444}" \
-        --vk-xhttp-path "${XHTTP_VK_PATH}" \
-        --vk-ws-port "${XRAY_VK_WS_PORT:-20445}" \
-        --vk-ws-path "${WS_VK_PATH}" \
-        --ya-xhttp-port "${XRAY_YA_XHTTP_PORT:-20446}" \
-        --ya-xhttp-path "${XHTTP_YA_PATH}" \
-        --ya-ws-port "${XRAY_YA_WS_PORT:-20447}" \
-        --ya-ws-path "${WS_YA_PATH}"
-
-    docker start combain-3xui >/dev/null
+    mod_xray_apply_inbounds
 
     # Обновляем nginx (скрытый путь панели) и sniproxy (выбранный REALITY_SNI)
     if declare -f _render_nginx_conf >/dev/null 2>&1; then
@@ -147,7 +157,7 @@ mod_xray_3xui_setup() {
     echo -e "${BOLD}--- Опционально: привязка доменов VK Cloud CDN / Yandex Cloud CDN ---${NC}"
     echo "Если вы уже создали CDN-ресурс с источником ${BASE_DOMAIN}:443 (см. docs/cdn_whitelist_guide.md),"
     echo "укажите выданный CDN-домен сейчас (иначе просто нажмите Enter, настроите позже в меню 5 -> 1)."
-    echo "  * Пути VK CDN:     /${XHTTP_VK_PATH} (XHTTP) | /${WS_VK_PATH} (WS)"
+    echo "  * Пути VK CDN:     /${XHTTP_VK_PATH} (XHTTP GET-only, без POST и WS)"
     echo "  * Пути Yandex CDN: /${XHTTP_YA_PATH} (XHTTP) | /${WS_YA_PATH} (WS)"
     read -rp "Подключить домены CDN сейчас? [y/N]: " cdn_now
     if [[ "${cdn_now,,}" == "y" ]]; then

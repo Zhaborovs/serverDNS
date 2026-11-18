@@ -5,7 +5,7 @@
 # Назначение:
 #   - Форматированный вывод всей инфраструктуры в SSH-терминал и в файл last_summary.txt
 #   - Секретная панель 3x-ui, ссылки VLESS-Reality, Direct XHTTP, VK CDN и Yandex CDN
-#   - Профили AmneziaWG (AWG 2.0+): пути к .conf и нативные vpn:// ссылки
+#   - Профили AmneziaWG (AWG 3.1): пути к .conf и нативные vpn:// ссылки
 #   - Ссылки Telegram Proxy (MTProto Fake-TLS + SOCKS5)
 #   - Памятка DoH/DoT/DoQ + команда PowerShell для Windows 11
 #   - QR-коды для мгновенного сканирования с телефона
@@ -54,7 +54,7 @@ mod_dashboard_show_info() {
         echo "              SERVER-COMBAIN — СВОДКА НАСТРОЕК СЕРВЕРА"
         echo "========================================================================"
         echo "Внешний IPv4:       ${cur_ip} (ICMP Ping отключен)"
-        echo "Сайт-заглушка:      https://${base_dom}/  (Игра + ABR/Cloud шум)"
+        echo "Сайт-заглушка:      https://${base_dom}/  (NetPulse SpeedTest + Рогалик «Лапки и Руны»)"
         echo "DNS домен:          ${dns_dom}"
         echo ""
         echo "--- [1] УМНЫЙ DNS (AdGuard Home + SNI Proxy на 443 порту) ---"
@@ -80,10 +80,10 @@ mod_dashboard_show_info() {
             echo "Ссылки Xray еще не сгенерированы (запустите установку модуля 05)."
         fi
         echo "Пути CDN (для настройки в панели VK/Yandex Cloud):"
-        echo "  * VK Cloud CDN:     /${XHTTP_VK_PATH:-?} (XHTTP) | /${WS_VK_PATH:-?} (WS)"
+        echo "  * VK Cloud CDN:     /${XHTTP_VK_PATH:-?} (XHTTP GET-only, POST и WS не нужны)"
         echo "  * Yandex Cloud CDN: /${XHTTP_YA_PATH:-?} (XHTTP) | /${WS_YA_PATH:-?} (WS)"
         echo ""
-        echo "--- [3] AmneziaWG (AWG 2.0+ с обфускацией и локальным DNS) ---"
+        echo "--- [3] AmneziaWG (AWG 3.1 с обфускацией и локальным DNS) ---"
         echo "UDP порт:           ${AWG_PORT:-не задан}"
         echo "Подсеть / DNS:      ${AWG_SUBNET:-10.8.1.0/24} (DNS внутри туннеля: ${AWG_SERVER_IP:-10.8.1.1})"
         echo "Профили (.conf):    ${STATE_DIR}/clients/"
@@ -108,7 +108,7 @@ mod_dashboard_show_info() {
 
     if [[ -n "$default_awg_vpn" ]]; then
         echo ""
-        echo -e "${CYAN}QR-код AmneziaWG 2.0+ (default):${NC}"
+        echo -e "${CYAN}QR-код AmneziaWG 3.1 (default):${NC}"
         print_qr_if_available "$default_awg_vpn"
     fi
 

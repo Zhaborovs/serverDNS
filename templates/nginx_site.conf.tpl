@@ -26,6 +26,7 @@ server {
     listen 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT} ssl;
     http2 on;
     server_name ${BASE_DOMAIN} *.${BASE_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN};
+    large_client_header_buffers 8 32k;
 
     ssl_certificate     /etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${BASE_DOMAIN}/privkey.pem;
@@ -50,8 +51,12 @@ server {
     location ^~ /${XHTTP_VK_PATH} {
         proxy_pass http://127.0.0.1:${XRAY_VK_XHTTP_PORT};
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_buffering off;
         proxy_request_buffering off;
+        gzip off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         client_max_body_size 0;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -69,8 +74,12 @@ server {
     location ^~ /${XHTTP_YA_PATH} {
         proxy_pass http://127.0.0.1:${XRAY_YA_XHTTP_PORT};
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_buffering off;
         proxy_request_buffering off;
+        gzip off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         client_max_body_size 0;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -154,7 +163,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
-    # --- Сайт-заглушка (Веб-игра «Киберпанк Космо-Ранер») ---
+    # --- Сайт-заглушка (NetPulse SpeedTest + карточный рогалик «Лапки и Руны») ---
     location / {
         root /usr/share/nginx/decoy;
         index index.html;

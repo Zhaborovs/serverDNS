@@ -31,6 +31,17 @@ import uuid
 _P = (1 << 255) - 19
 _A24 = 121665
 
+# Режим чистого GET-транспорта для VK Cloud CDN (где POST и WebSocket отключены по умолчанию)
+VK_GET_XHTTP_EXTRA = {
+    "mode": "packet-up",
+    "xPaddingBytes": "100-1000",
+    "uplinkHTTPMethod": "GET",
+    "uplinkDataPlacement": "cookie",
+    "uplinkDataKey": "x_data",
+    "scMaxEachPostBytes": "2500-3500",
+    "scMinPostsIntervalMs": "10-25",
+}
+
 
 def _x25519_clamp(scalar_bytes: bytes) -> int:
     b = bytearray(scalar_bytes)
@@ -341,12 +352,32 @@ def cmd_init_all(args: argparse.Namespace) -> int:
         ]
         for tag, remark, port, net, path, email in cdn_defs:
             if net == "xhttp":
-                stream = {
-                    "network": "xhttp",
-                    "security": "none",
-                    "externalProxy": [],
-                    "xhttpSettings": {"path": path, "host": "", "mode": "auto"},
-                }
+                if tag == "combain-vk-xhttp":
+                    stream = {
+                        "network": "xhttp",
+                        "security": "none",
+                        "externalProxy": [],
+                        "xhttpSettings": {
+                            "path": path,
+                            "host": "",
+                            "mode": "packet-up",
+                            "xPaddingBytes": "100-1000",
+                            "uplinkHTTPMethod": "GET",
+                            "uplinkDataPlacement": "cookie",
+                            "uplinkDataKey": "x_data",
+                            "scMaxEachPostBytes": "2500-3500",
+                            "scMinPostsIntervalMs": "10-25",
+                            "scMaxBufferedPosts": 200,
+                            "serverMaxHeaderBytes": 32768,
+                        },
+                    }
+                else:
+                    stream = {
+                        "network": "xhttp",
+                        "security": "none",
+                        "externalProxy": [],
+                        "xhttpSettings": {"path": path, "host": "", "mode": "auto"},
+                    }
             else:
                 stream = {
                     "network": "ws",
@@ -410,6 +441,24 @@ def cmd_export_links(args: argparse.Namespace) -> int:
         )
     )
     if args.base_domain:
+        if args.ya_xhttp_path:
+            direct_params = {
+                "type": "xhttp",
+                "security": "tls",
+                "sni": args.base_domain,
+                "fp": "chrome",
+                "path": f"/{args.ya_xhttp_path.lstrip('/')}",
+            }
+        else:
+            direct_params = {
+                "type": "xhttp",
+                "security": "tls",
+                "sni": args.base_domain,
+                "fp": "chrome",
+                "path": f"/{args.vk_xhttp_path.lstrip('/')}",
+                "mode": "packet-up",
+                "extra": json.dumps(VK_GET_XHTTP_EXTRA, separators=(",", ":")),
+            }
         links.append(
             (
                 "VLESS-XHTTP (прямой через ваш домен)",
@@ -417,13 +466,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                     args.uuid,
                     args.base_domain,
                     443,
-                    {
-                        "type": "xhttp",
-                        "security": "tls",
-                        "sni": args.base_domain,
-                        "fp": "chrome",
-                        "path": f"/{args.vk_xhttp_path.lstrip('/')}",
-                    },
+                    direct_params,
                     "Combain-Direct-XHTTP",
                 ),
             )
@@ -431,7 +474,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
     if args.vk_cdn_domain:
         links.append(
             (
-                "VK Cloud CDN (XHTTP, белый список)",
+                "VK Cloud CDN (XHTTP GET-режим, белый список)",
                 build_vless_uri(
                     args.uuid,
                     args.vk_cdn_domain,
@@ -443,27 +486,10 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                         "host": args.vk_cdn_domain,
                         "fp": "chrome",
                         "path": f"/{args.vk_xhttp_path.lstrip('/')}",
+                        "mode": "packet-up",
+                        "extra": json.dumps(VK_GET_XHTTP_EXTRA, separators=(",", ":")),
                     },
                     "VK-CDN-XHTTP",
-                ),
-            )
-        )
-        links.append(
-            (
-                "VK Cloud CDN (WebSocket fallback)",
-                build_vless_uri(
-                    args.uuid,
-                    args.vk_cdn_domain,
-                    443,
-                    {
-                        "type": "ws",
-                        "security": "tls",
-                        "sni": args.vk_cdn_domain,
-                        "host": args.vk_cdn_domain,
-                        "fp": "chrome",
-                        "path": f"/{args.vk_ws_path.lstrip('/')}",
-                    },
-                    "VK-CDN-WS",
                 ),
             )
         )
