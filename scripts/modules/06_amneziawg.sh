@@ -94,8 +94,6 @@ mod_amneziawg_add_client() {
         vpn_uri="$(cat "$vpn_file")"
         echo -e "${GREEN}Ссылка для импорта в AmneziaVPN (vpn://):${NC}"
         echo "$vpn_uri"
-        echo ""
-        echo -e "${CYAN}QR-код AmneziaWG 3.1 (${client_name}):${NC}"
-        print_qr_if_available "$vpn_uri"
+        log_info "Для вывода QR-кода откройте меню QR-кодов: combain qr (или пункт 8 в меню)."
     fi
 }
