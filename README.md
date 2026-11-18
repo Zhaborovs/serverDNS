@@ -35,18 +35,18 @@
 
 ## Быстрый старт (Установка одной командой с Git)
 
-> Перед публикацией в свой репозиторий замените `<YOUR_USER>/serverDNS` на актуальный путь вашего репозитория (в [install.sh](install.sh) также задается в `DEFAULT_REPO_URL`). Запускать на чистой **Ubuntu 24.04 LTS** от `root`.
+> Запускать на чистой **Ubuntu 24.04 LTS** от `root`.
 
 ### Вариант 1 (Рекомендуемый — скачивание из Git и запуск мастера одной строкой)
 
 ```bash
-apt-get update -y && apt-get install -y git && rm -rf /opt/server-combain && git clone https://github.com/<YOUR_USER>/serverDNS.git /opt/server-combain && bash /opt/server-combain/install.sh && combain
+apt-get update -y && apt-get install -y git && rm -rf /opt/server-combain && git clone https://github.com/Zhaborovs/serverDNS.git /opt/server-combain && bash /opt/server-combain/install.sh && combain
 ```
 
 ### Вариант 2 (Через `curl` одной строкой)
 
 ```bash
-COMBAIN_REPO_URL="https://github.com/<YOUR_USER>/serverDNS.git" bash <(curl -fsSL https://raw.githubusercontent.com/<YOUR_USER>/serverDNS/main/install.sh) && combain
+COMBAIN_REPO_URL="https://github.com/Zhaborovs/serverDNS.git" bash <(curl -fsSL https://raw.githubusercontent.com/Zhaborovs/serverDNS/main/install.sh) && combain
 ```
 
 ### Вариант 3 (Если репозиторий уже склонирован локально)
@@ -157,4 +157,3 @@ serverDNS/
     ├── antigravity_legacy_ref.md    # Архивная копия исходной документации сервера
     └── cdn_whitelist_guide.md       # Гайд по настройке VK Cloud CDN и Yandex Cloud CDN
 ```
-# serverDNS

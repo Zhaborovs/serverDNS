@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Модуль 05: 3x-ui и Xray-core (Скрытая панель + VLESS-Reality + VK/Yandex CDN)
+# ------------------------------------------------------------------------------
+# Назначение:
+#   - Автоматический подбор оптимального SNI из whitelist_sni.list (TLS 1.3 + H2)
+#   - Генерация ключей X25519 Reality, shortId и MAIN_CLIENT_UUID
+#   - Запуск контейнера 3x-ui (ghcr.io/mhsanaei/3x-ui:latest)
+#   - Настройка скрытой панели на 127.0.0.1:${XUI_INTERNAL_PORT}/${SECRET_PANEL_PATH}/
+#   - Инициализация 5 инбаундов (Reality, VK XHTTP/WS, Yandex XHTTP/WS) через xui_db_manager.py
+#   - Синхронизация sniproxy с выбранным REALITY_SNI
+# Входные переменные (state.env):
+#   XUI_VERSION, XUI_INTERNAL_PORT, SECRET_PANEL_PATH, PANEL_USER, PANEL_PASS,
+#   REALITY_SNI, XRAY_REALITY_INTERNAL_PORT, XHTTP_VK_PATH, WS_VK_PATH,
+#   XHTTP_YA_PATH, WS_YA_PATH, VK_CDN_DOMAIN, YA_CDN_DOMAIN
+# Выходные артефакты:
+#   /etc/x-ui/x-ui.db, ключи Reality в /etc/server-combain/state.env
+# ==============================================================================
+
+_xray_auto_select_reality_sni() {
+    local wl_file="${PROJECT_ROOT}/config/presets/whitelist_sni.list"
+    [[ ! -f "$wl_file" ]] && return 0
+
+    log_info "Авто-проверка доменов из белого списка для VLESS-Reality (TLS 1.3 + HTTP/2)..."
+    local best_sni=""
+    local best_time="99999"
+
+    while IFS= read -r dom; do
+        dom="$(printf '%s' "$dom" | tr -d '\r' | xargs)"
+        [[ -z "$dom" || "$dom" == \#* ]] && continue
+
+        # Замеряем успешность TLS 1.3 + H2 и время установления TLS-соединения
+        local res code t_connect
+        res="$(curl -sS -o /dev/null --tlsv1.3 --http2 --max-time 3 -w "%{http_code} %{time_connect}" "https://${dom}/" 2>/dev/null || echo "000 99")"
+        code="${res%% *}"
+        t_connect="${res##* }"
+
+        if [[ "$code" != "000" ]]; then
+            local ms
+            ms="$(awk -v t="$t_connect" 'BEGIN {printf "%d", t * 1000}')"
+            echo -e "  [${GREEN}OK${NC}] ${dom} (HTTP ${code}, TLS ${ms} ms)"
+            if [[ "$ms" -lt "$best_time" ]]; then
+                best_time="$ms"
+                best_sni="$dom"
+            fi
+        else
+            echo -e "  [${YELLOW}SKIP${NC}] ${dom} (нет ответа TLS 1.3 / таймаут)"
+        fi
+    done < "$wl_file"
+
+    if [[ -n "$best_sni" ]]; then
+        log_ok "Рекомендованный быстрый SNI для Reality: ${best_sni} (${best_time} ms)"
+        read -rp "Использовать '${best_sni}' или ввести свой SNI? [Enter = ${best_sni}]: " custom_sni
+        state_set "REALITY_SNI" "${custom_sni:-$best_sni}"
+    else
+        log_warn "Авто-чекер не нашел доступный домен, оставлен SNI по умолчанию: ${REALITY_SNI:-sun9-73.userapi.com}"
+    fi
+}
+
+_xray_ensure_keys() {
+    state_load_silent
+    if [[ -n "${REALITY_PRIVATE_KEY:-}" && -n "${REALITY_PUBLIC_KEY:-}" && -n "${MAIN_CLIENT_UUID:-}" ]]; then
+        return 0
+    fi
+
+    log_info "Генерация ключей X25519 Reality и UUID клиента..."
+    local keys_out
+    keys_out="$(python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" gen-keys)"
+    while IFS='=' read -r k v; do
+        [[ -n "$k" && -n "$v" ]] && state_set "$k" "$v"
+    done <<< "$keys_out"
+    log_ok "Ключи X25519 и UUID сгенерированы и сохранены в state.env."
+}
+
+mod_xray_3xui_setup() {
+    log_step "Модуль 05: Установка 3x-ui (latest), автоподбор Reality SNI и настройка CDN инбаундов"
+    state_load_silent
+
+    local resolved_ver
+    if [[ "${XUI_VERSION:-latest}" == "latest" ]]; then
+        resolved_ver="$(fetch_latest_github_release "MHSanaei/3x-ui" "latest")"
+        log_info "Последний релиз MHSanaei/3x-ui на GitHub: ${resolved_ver} (используется docker-тег :latest)."
+    fi
+
+    _xray_auto_select_reality_sni
+    _xray_ensure_keys
+    state_load_silent
+
+    mkdir -p /etc/x-ui
+    # Обновляем docker-compose.yml с актуальными переменными и запускаем 3x-ui для создания базовой БД
+    if declare -f _render_docker_compose >/dev/null 2>&1; then
+        _render_docker_compose
+    fi
+
+    log_info "Первичный запуск контейнера combain-3xui..."
+    docker compose --env-file "$STATE_FILE" -f "${STATE_DIR}/docker-compose.yml" up -d 3x-ui
+
+    # Ждем инициализации SQLite базы данных внутри контейнера
+    for _ in $(seq 1 15); do
+        [[ -f /etc/x-ui/x-ui.db ]] && break
+        sleep 1
+    done
+
+    # Применяем учетные данные панели через встроенный CLI 3x-ui
+    docker exec combain-3xui /app/x-ui setting \
+        -username "${PANEL_USER}" \
+        -password "${PANEL_PASS}" \
+        -port "${XUI_INTERNAL_PORT}" \
+        -webBasePath "/${SECRET_PANEL_PATH}/" >/dev/null 2>&1 || true
+
+    # Останавливаем контейнер на время безопасного патчинга БД x-ui.db
+    docker stop combain-3xui >/dev/null 2>&1 || true
+
+    python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" init-all \
+        --db /etc/x-ui/x-ui.db \
+        --panel-port "${XUI_INTERNAL_PORT}" \
+        --panel-path "${SECRET_PANEL_PATH}" \
+        --uuid "${MAIN_CLIENT_UUID}" \
+        --reality-sni "${REALITY_SNI}" \
+        --reality-private-key "${REALITY_PRIVATE_KEY}" \
+        --reality-public-key "${REALITY_PUBLIC_KEY}" \
+        --reality-short-id "${REALITY_SHORT_ID}" \
+        --reality-port "${XRAY_REALITY_INTERNAL_PORT:-20443}" \
+        --vk-xhttp-port "${XRAY_VK_XHTTP_PORT:-20444}" \
+        --vk-xhttp-path "${XHTTP_VK_PATH}" \
+        --vk-ws-port "${XRAY_VK_WS_PORT:-20445}" \
+        --vk-ws-path "${WS_VK_PATH}" \
+        --ya-xhttp-port "${XRAY_YA_XHTTP_PORT:-20446}" \
+        --ya-xhttp-path "${XHTTP_YA_PATH}" \
+        --ya-ws-port "${XRAY_YA_WS_PORT:-20447}" \
+        --ya-ws-path "${WS_YA_PATH}"
+
+    docker start combain-3xui >/dev/null
+
+    # Обновляем nginx (скрытый путь панели) и sniproxy (выбранный REALITY_SNI)
+    if declare -f _render_nginx_conf >/dev/null 2>&1; then
+        _render_nginx_conf
+        docker restart combain-nginx >/dev/null 2>&1 || true
+    fi
+    if declare -f mod_sniproxy_sync_domains >/dev/null 2>&1; then
+        mod_sniproxy_sync_domains
+    fi
+
+    log_ok "Модуль 05 завершен: 3x-ui скрыта за /${SECRET_PANEL_PATH}/, инбаунды Reality и VK/Yandex CDN активны."
+}
+
+mod_xray_configure_cdn_domains() {
+    state_load_silent
+    echo ""
+    echo -e "${BOLD}--- Настройка доменов VK Cloud CDN и Yandex Cloud CDN ---${NC}"
+    echo "Подробная инструкция: ${PROJECT_ROOT}/docs/cdn_whitelist_guide.md"
+    read -rp "Домен VK Cloud CDN (Enter оставить '${VK_CDN_DOMAIN:-}', '-' очистить): " vk_dom
+    read -rp "Домен Yandex Cloud CDN (Enter оставить '${YA_CDN_DOMAIN:-}', '-' очистить): " ya_dom
+
+    if [[ "$vk_dom" == "-" ]]; then
+        state_set "VK_CDN_DOMAIN" ""
+    elif [[ -n "$vk_dom" ]]; then
+        state_set "VK_CDN_DOMAIN" "$vk_dom"
+    fi
+
+    if [[ "$ya_dom" == "-" ]]; then
+        state_set "YA_CDN_DOMAIN" ""
+    elif [[ -n "$ya_dom" ]]; then
+        state_set "YA_CDN_DOMAIN" "$ya_dom"
+    fi
+
+    if declare -f _render_nginx_conf >/dev/null 2>&1; then
+        _render_nginx_conf
+        docker restart combain-nginx >/dev/null 2>&1 || true
+    fi
+    log_ok "CDN-домены обновлены. Ссылки vless:// доступны через 'combain info'."
+}

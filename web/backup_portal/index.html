@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Server-Combain // Портал миграции (TTL 60 мин)</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --card: #0f172a;
+      --border: #1e293b;
+      --accent: #38bdf8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top, #111c36 0%, var(--bg) 75%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .card {
+      width: 100%;
+      max-width: 560px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+      text-align: center;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.35rem; color: var(--accent); }
+    .ttl {
+      display: inline-block;
+      font-family: monospace;
+      font-size: 0.9rem;
+      padding: 4px 12px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+    .drop-zone {
+      border: 2px dashed #334155;
+      border-radius: 14px;
+      padding: 34px 20px;
+      background: #0b1222;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    .btn {
+      display: inline-block;
+      margin-top: 14px;
+      padding: 11px 22px;
+      border-radius: 10px;
+      border: none;
+      background: linear-gradient(135deg, #38bdf8, #0284c7);
+      color: #020617;
+      font-weight: 700;
+      font-size: 0.95rem;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .progress-wrap {
+      display: none;
+      margin-top: 18px;
+      background: #020617;
+      border-radius: 10px;
+      overflow: hidden;
+      height: 14px;
+      border: 1px solid var(--border);
+    }
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #38bdf8, #22c55e);
+      transition: width 0.15s ease;
+    }
+    .status { margin-top: 14px; font-size: 0.92rem; color: var(--muted); word-break: break-word; }
+    .status.ok { color: var(--green); font-weight: 600; }
+    .status.err { color: var(--red); font-weight: 600; }
+    .hidden { display: none; }
+    code { background: #1e293b; padding: 2px 6px; border-radius: 5px; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Server-Combain // Портал миграции</h1>
+    <div class="ttl">Осталось времени: <span id="timer">60:00</span></div>
+
+    <div id="uploadSection" class="__UPLOAD_CLASS__">
+      <div class="drop-zone" id="dropZone">
+        <p style="margin:0 0 8px;font-weight:600;">Перетащите зашифрованный архив бэкапа сюда</p>
+        <p style="margin:0;color:var(--muted);font-size:0.85rem;">Поддерживаются <code>.tar.gz.enc</code> и <code>.tar.gz</code> (пароль — имя файла)</p>
+        <input type="file" id="fileInput" accept=".enc,.gz,.tgz" style="display:none;" />
+        <button class="btn" id="pickBtn" type="button">Выбрать файл с компьютера</button>
+      </div>
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+    </div>
+
+    <div id="downloadSection" class="__DOWNLOAD_CLASS__">
+      <p style="color:var(--muted);font-size:0.92rem;">Архив готов к скачиванию на ваш компьютер или новый сервер:</p>
+      <p><code>__FILENAME__</code></p>
+      <a class="btn" id="dlLink" href="#">Скачать архив бэкапа</a>
+    </div>
+
+    <div class="status" id="statusText">Соединение защищено одноразовым токеном доступа.</div>
+  </div>
+
+  <script>
+    (() => {
+      const token = new URLSearchParams(window.location.search).get('token') || '__TOKEN__';
+      let remaining = Number('__REMAINING_SEC__') || 3600;
+
+      const timerEl = document.getElementById('timer');
+      const statusEl = document.getElementById('statusText');
+      const dlLink = document.getElementById('dlLink');
+
+      if (dlLink) {
+        dlLink.href = `download?token=${encodeURIComponent(token)}`;
+      }
+
+      setInterval(() => {
+        if (remaining <= 0) {
+          timerEl.textContent = '00:00 (истекло)';
+          return;
+        }
+        remaining -= 1;
+        const m = String(Math.floor(remaining / 60)).padStart(2, '0');
+        const s = String(remaining % 60).padStart(2, '0');
+        timerEl.textContent = `${m}:${s}`;
+      }, 1000);
+
+      const dropZone = document.getElementById('dropZone');
+      const fileInput = document.getElementById('fileInput');
+      const pickBtn = document.getElementById('pickBtn');
+      const progressWrap = document.getElementById('progressWrap');
+      const progressBar = document.getElementById('progressBar');
+
+      if (!dropZone) return;
+
+      pickBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files && fileInput.files[0]) uploadFile(fileInput.files[0]);
+      });
+
+      ['dragenter', 'dragover'].forEach((ev) => {
+        dropZone.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropZone.classList.add('dragover');
+        });
+      });
+      ['dragleave', 'drop'].forEach((ev) => {
+        dropZone.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('dragover');
+        });
+      });
+      dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files && files[0]) uploadFile(files[0]);
+      });
+
+      function uploadFile(file) {
+        progressWrap.style.display = 'block';
+        progressBar.style.width = '0%';
+        statusEl.className = 'status';
+        statusEl.textContent = `Загрузка ${file.name} (${(file.size / 1048576).toFixed(2)} MB)...`;
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `upload?token=${encodeURIComponent(token)}`, true);
+        xhr.setRequestHeader('X-Filename', encodeURIComponent(file.name));
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            progressBar.style.width = `${pct}%`;
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            progressBar.style.width = '100%';
+            statusEl.className = 'status ok';
+            statusEl.textContent = `Архив '${file.name}' успешно принят! Восстановление запущено в SSH-терминале, портал закрывается.`;
+          } else {
+            statusEl.className = 'status err';
+            statusEl.textContent = `Ошибка загрузки (HTTP ${xhr.status}): ${xhr.responseText}`;
+          }
+        };
+
+        xhr.onerror = () => {
+          statusEl.className = 'status err';
+          statusEl.textContent = 'Сетевая ошибка при отправке архива.';
+        };
+
+        xhr.send(file);
+      }
+    })();
+  </script>
+</body>
+</html>

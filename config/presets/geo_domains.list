@@ -1,0 +1,104 @@
+# ==============================================================================
+# Server-Combain — Пресет доменов для обхода геоблокировок (AdGuard + SNIProxy)
+# Перенесено полностью из docs/antigravity_legacy_ref.md (antigravity.md).
+# Формат: по одному базовому домену на строку. Комментарии начинаются с '#'.
+# При применении для каждого домена в AdGuard Home создаются 3 правила:
+#   ||domain^$dnsrewrite=NOERROR;A;<SERVER_IP>
+#   ||domain^$dnstype=AAAA
+#   ||domain^$dnstype=HTTPS
+# И соответствующее правило проксирования в /etc/sniproxy.conf.
+# ==============================================================================
+
+# --- OpenAI / ChatGPT / Sora ---
+openai.com
+chatgpt.com
+oaistatic.com
+oaiusercontent.com
+sora.com
+auth0.com
+
+# --- Google Gemini / AI Studio / NotebookLM / Labs / DeepMind ---
+gemini.google.com
+aistudio.google.com
+makersuite.google.com
+clients6.google.com
+alkalimakersuite-pa.clients6.google.com
+geminiweb-pa.clients6.google.com
+signaler-pa.clients6.google.com
+ogads-pa.clients6.google.com
+push.clients6.google.com
+generativelanguage.googleapis.com
+proactivebackend-pa.googleapis.com
+aisandbox-pa.googleapis.com
+robinfrontend-pa.googleapis.com
+geller-pa.googleapis.com
+notebooklm.google
+notebooklm.google.com
+labs.google
+jules.google.com
+idx.dev
+ai.google.dev
+deepmind.google
+ogs.google.com
+apis.google.com
+play.google.com
+
+# --- Google Antigravity IDE ---
+daily-cloudcode-pa.googleapis.com
+cloudcode-pa.googleapis.com
+antigravity.google
+antigravity-unleash.goog
+aicode.googleapis.com
+businessaicode.googleapis.com
+oauth2.googleapis.com
+
+# --- Anthropic / Claude ---
+claude.ai
+anthropic.com
+
+# --- xAI / Grok ---
+grok.com
+x.ai
+
+# --- Microsoft Copilot / Bing AI / GitHub Copilot ---
+copilot.microsoft.com
+sydney.bing.com
+edgeservices.bing.com
+api.githubcopilot.com
+copilot-proxy.githubusercontent.com
+
+# --- Другие ИИ-сервисы (Perplexity, ElevenLabs) ---
+perplexity.ai
+elevenlabs.io
+
+# --- Музыка и продуктивность (Spotify, JetBrains, Notion, Canva) ---
+spotify.com
+scdn.co
+spotifycdn.com
+jetbrains.com
+notion.so
+canva.com
+
+# --- Autodesk Fusion (Fusion 360) ---
+autodesk.com
+autodesk360.com
+autodesk.net
+autodesk.io
+a360.co
+damassets.net
+library.io
+launchdarkly.com
+pubnub.com
+pndsn.com
+
+# --- Веб-клиент Telegram ---
+telegram.org
+t.me
+telesco.pe
+cdn-telegram.org
+
+# --- Тестовые определители IP (для проверки работы подмены) ---
+2ip.ru
+2ip.io
+ifconfig.me
+icanhazip.com

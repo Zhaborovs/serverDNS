@@ -1,0 +1,30 @@
+# ==============================================================================
+# Server-Combain — Белый список SNI для маскировки VLESS-Reality и MTProto
+# Выбираются ресурсы с поддержкой TLS 1.3 + HTTP/2 (H2), находящиеся
+# в российских «белых списках» (VK, Яндекс, Mail.ru, Ozon и др.).
+# ВАЖНО: sniproxy маршрутизирует эти SNI на локальный Reality-инбаунд (127.0.0.1:20443),
+# поэтому они НЕ должны конфликтовать с рабочими доменами из geo_domains.list!
+# ==============================================================================
+
+# --- Инфраструктура VK / Mail.ru ---
+sun9-73.userapi.com
+vk.com
+st.vk.com
+mycdn.me
+mail.ru
+cloud.mail.ru
+
+# --- Инфраструктура Яндекс ---
+yandex.ru
+ya.ru
+yastatic.net
+avatars.mds.yandex.net
+storage.yandexcloud.net
+
+# --- Прочие российские крупные площадки и CDN ---
+ozon.ru
+st.ozone.ru
+wildberries.ru
+gosuslugi.ru
+sberbank.ru
+tbank.ru
