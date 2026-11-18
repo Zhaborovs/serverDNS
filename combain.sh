@@ -125,6 +125,63 @@ menu_vpn_management() {
     esac
 }
 
+menu_credentials() {
+    state_load_silent
+    while true; do
+        echo ""
+        echo -e "${BOLD}--- Логины и пароли сервисов ---${NC}"
+        echo -e " AdGuard Home (https://${DNS_DOMAIN:-?}/):"
+        echo -e "   Логин: ${GREEN}${AGH_USER:-dnsadmin}${NC}  |  Пароль: ${GREEN}${AGH_PASS:-не задан}${NC}"
+        echo -e " Панель 3x-ui (https://${BASE_DOMAIN:-?}/${SECRET_PANEL_PATH:-?}/):"
+        echo -e "   Логин: ${GREEN}${PANEL_USER:-admin}${NC}  |  Пароль: ${GREEN}${PANEL_PASS:-не задан}${NC}"
+        echo ""
+        echo " 1) Сменить логин / пароль AdGuard Home"
+        echo " 2) Сменить логин / пароль панели 3x-ui"
+        echo " 0) Назад"
+        read -rp "Выберите действие [0-2]: " cred_choice
+        case "$cred_choice" in
+            1)
+                local new_u new_p
+                read -rp "Новый логин AdGuard Home [${AGH_USER:-dnsadmin}]: " new_u
+                read -rp "Новый пароль AdGuard Home (Enter = сгенерировать случайный): " new_p
+                new_u="${new_u:-${AGH_USER:-dnsadmin}}"
+                new_p="${new_p:-$(gen_random_str 18)}"
+                state_set "AGH_USER" "$new_u"
+                state_set "AGH_PASS" "$new_p"
+                if [[ -x /opt/AdGuardHome/AdGuardHome ]]; then
+                    _agh_stop_safe
+                    python3 "${PROJECT_ROOT}/scripts/py_helpers/agh_config_manager.py" init-config \
+                        --config /opt/AdGuardHome/AdGuardHome.yaml \
+                        --ip "${SERVER_IP}" \
+                        --dns-domain "${DNS_DOMAIN}" \
+                        --https-port "${AGH_INTERNAL_HTTPS_PORT:-8444}" \
+                        --dot-port "${AGH_DOT_PORT:-853}" \
+                        --user "$new_u" \
+                        --password "$new_p"
+                    _agh_start_safe
+                fi
+                log_ok "Логин и пароль AdGuard Home обновлены: ${new_u} / ${new_p}"
+                ;;
+            2)
+                local new_xu new_xp
+                read -rp "Новый логин 3x-ui [${PANEL_USER:-admin}]: " new_xu
+                read -rp "Новый пароль 3x-ui (Enter = сгенерировать случайный): " new_xp
+                new_xu="${new_xu:-${PANEL_USER:-admin}}"
+                new_xp="${new_xp:-$(gen_random_str 18)}"
+                state_set "PANEL_USER" "$new_xu"
+                state_set "PANEL_PASS" "$new_xp"
+                if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^combain-3xui$'; then
+                    docker exec combain-3xui /app/x-ui setting -username "$new_xu" -password "$new_xp" >/dev/null
+                    docker restart combain-3xui >/dev/null
+                fi
+                log_ok "Логин и пароль 3x-ui обновлены: ${new_xu} / ${new_xp}"
+                ;;
+            0) return 0 ;;
+            *) log_warn "Неверный выбор." ;;
+        esac
+    done
+}
+
 interactive_loop() {
     while true; do
         state_load_silent
@@ -135,9 +192,10 @@ interactive_loop() {
         echo " 4. Управление доменами геоблока (AdGuard Home + SNIProxy синхронно)"
         echo " 5. Управление VPN и клиентами (Xray / VK-Yandex CDN / AmneziaWG / TG Proxy)"
         echo " 6. Показать полную сводку настроек, ссылок, паролей и QR-кодов (combain info)"
+        echo " 7. Пароли и доступы (просмотр и смена логинов/паролей AdGuard и 3x-ui)"
         echo " 0. Выход"
         echo ""
-        read -rp "Выберите пункт [0-6]: " choice
+        read -rp "Выберите пункт [0-7]: " choice
         case "$choice" in
             1) menu_full_install ;;
             2) menu_quick_change_ip ;;
@@ -145,6 +203,7 @@ interactive_loop() {
             4) menu_geo_domains ;;
             5) menu_vpn_management ;;
             6) mod_dashboard_show_info ;;
+            7) menu_credentials ;;
             0) exit 0 ;;
             *) log_warn "Некорректный пункт меню." ;;
         esac

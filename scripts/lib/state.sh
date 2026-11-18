@@ -14,6 +14,7 @@ state_ensure_dirs() {
 
 state_load_silent() {
     state_ensure_dirs
+    set -a
     if [[ -f "$STATE_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$STATE_FILE"
@@ -21,6 +22,7 @@ state_load_silent() {
         # shellcheck disable=SC1090
         source "${PROJECT_ROOT}/config/default.env.example"
     fi
+    set +a
 }
 
 # Безопасная запись/обновление ключа в state.env
@@ -108,6 +110,19 @@ state_init_interactive() {
     [[ -z "${AGH_USER:-}" ]]            && state_set "AGH_USER" "dnsadmin"
     [[ -z "${AGH_PASS:-}" ]]            && state_set "AGH_PASS" "$(gen_random_str 18)"
     [[ -z "${SOCKS5_PASS:-}" ]]         && state_set "SOCKS5_PASS" "$(gen_random_str 16)"
+
+    echo ""
+    echo -e "${BOLD}=== Настройка логинов и паролей (Enter = оставить автогенерацию) ===${NC}"
+    local in_val
+    read -rp "Логин AdGuard Home [${AGH_USER}]: " in_val
+    [[ -n "$in_val" ]] && state_set "AGH_USER" "$in_val"
+    read -rp "Пароль AdGuard Home [${AGH_PASS}]: " in_val
+    [[ -n "$in_val" ]] && state_set "AGH_PASS" "$in_val"
+
+    read -rp "Логин панели 3x-ui [${PANEL_USER}]: " in_val
+    [[ -n "$in_val" ]] && state_set "PANEL_USER" "$in_val"
+    read -rp "Пароль панели 3x-ui [${PANEL_PASS}]: " in_val
+    [[ -n "$in_val" ]] && state_set "PANEL_PASS" "$in_val"
 
     # Подсказка пользователю по DNS-записям
     echo ""

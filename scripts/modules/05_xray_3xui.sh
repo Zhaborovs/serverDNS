@@ -142,6 +142,17 @@ mod_xray_3xui_setup() {
     fi
 
     log_ok "Модуль 05 завершен: 3x-ui скрыта за /${SECRET_PANEL_PATH}/, инбаунды Reality и VK/Yandex CDN активны."
+
+    echo ""
+    echo -e "${BOLD}--- Опционально: привязка доменов VK Cloud CDN / Yandex Cloud CDN ---${NC}"
+    echo "Если вы уже создали CDN-ресурс с источником ${BASE_DOMAIN}:443 (см. docs/cdn_whitelist_guide.md),"
+    echo "укажите выданный CDN-домен сейчас (иначе просто нажмите Enter, настроите позже в меню 5 -> 1)."
+    echo "  * Пути VK CDN:     /${XHTTP_VK_PATH} (XHTTP) | /${WS_VK_PATH} (WS)"
+    echo "  * Пути Yandex CDN: /${XHTTP_YA_PATH} (XHTTP) | /${WS_YA_PATH} (WS)"
+    read -rp "Подключить домены CDN сейчас? [y/N]: " cdn_now
+    if [[ "${cdn_now,,}" == "y" ]]; then
+        mod_xray_configure_cdn_domains
+    fi
 }
 
 mod_xray_configure_cdn_domains() {
