@@ -24,7 +24,7 @@ listener 0.0.0.0:443 {
 }
 
 table combain_sni {
-    # 1. Домен AdGuard Home (DoH + панель) — идет ПЕРЕД wildcard BASE_DOMAIN!
+    # 1. Домен AdGuard Home (через Nginx vhost -> 127.0.0.1:8444, защита от HTTP/2 Coalescing)
 ${DNS_DOMAIN_RULES}
 
     # 2. Собственные домены сервера (заглушка, 3x-ui, CDN origin, Drag&Drop) -> Nginx

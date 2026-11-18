@@ -6,7 +6,7 @@
 #   - Генерация /etc/sniproxy.conf на базе templates/sniproxy.conf.tpl
 #   - Создание нативного systemd-юнита /etc/systemd/system/sniproxy.service (-f)
 #   - Маршрутизация SNI:
-#       * DNS_DOMAIN (если отличается от BASE_DOMAIN) -> 127.0.0.1:${AGH_INTERNAL_HTTPS_PORT}
+#       * DNS_DOMAIN -> 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT} (Nginx vhost dns_agh.conf -> AdGuard 8444, защита от HTTP/2 Coalescing)
 #       * BASE_DOMAIN и *.BASE_DOMAIN -> 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT}
 #       * whitelist_sni.list (для VLESS-Reality) -> 127.0.0.1:${XRAY_REALITY_INTERNAL_PORT}
 #       * geo_domains.list + кастомные + агрегированные Google/Microsoft -> *:443
@@ -66,7 +66,7 @@ mod_sniproxy_sync_domains() {
     dns_regex="$(_sniproxy_escape_regex "${DNS_DOMAIN}")"
 
     if [[ -n "${DNS_DOMAIN:-}" && "${DNS_DOMAIN}" != "${BASE_DOMAIN}" ]]; then
-        dns_rules="    ^${dns_regex}$ 127.0.0.1:${AGH_INTERNAL_HTTPS_PORT:-8444}"
+        dns_rules="    ^${dns_regex}$ 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT:-8443}"
     else
         dns_rules="    # Single-domain режим: /dns-query проксируется через Nginx"
     fi

@@ -25,6 +25,7 @@ from pathlib import Path
 import secrets
 import sqlite3
 import sys
+import time
 import urllib.parse
 import uuid
 
@@ -159,6 +160,50 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE,
+            sub_id TEXT,
+            uuid TEXT,
+            password TEXT DEFAULT '',
+            flow TEXT DEFAULT '',
+            limit_ip INTEGER DEFAULT 0,
+            limit_hwid INTEGER DEFAULT 0,
+            total_gb INTEGER DEFAULT 0,
+            expiry_time INTEGER DEFAULT 0,
+            enable INTEGER DEFAULT 1,
+            tg_id INTEGER DEFAULT 0,
+            group_name TEXT DEFAULT '',
+            comment TEXT DEFAULT '',
+            reset INTEGER DEFAULT 0,
+            traffic_reset TEXT DEFAULT 'never',
+            traffic_reset_day INTEGER DEFAULT 1,
+            created_at INTEGER DEFAULT 0,
+            updated_at INTEGER DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS client_inbounds (
+            client_id INTEGER,
+            inbound_id INTEGER,
+            flow_override TEXT DEFAULT '',
+            created_at INTEGER DEFAULT 0,
+            PRIMARY KEY (client_id, inbound_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS history_of_seeders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            seeder_name TEXT
+        )
+        """
+    )
     conn.commit()
 
 
@@ -187,6 +232,8 @@ def upsert_inbound(
     settings_obj: dict,
     stream_obj: dict,
     client_email: str = "",
+    client_uuid: str = "",
+    client_flow: str = "",
 ) -> None:
     sniffing_obj = {
         "enabled": True,
@@ -236,7 +283,7 @@ def upsert_inbound(
         )
         inbound_id = insert_cur.lastrowid
 
-    # Синхронно создаем запись клиента в client_traffics для корректного отображения в UI 3x-ui
+    # Синхронно создаем/включаем запись клиента в client_traffics для корректного отображения в UI 3x-ui
     ct_cols = get_table_columns(conn, "client_traffics")
     if ct_cols and client_email and inbound_id:
         ct_row = conn.execute(
@@ -263,6 +310,87 @@ def upsert_inbound(
                 f"INSERT INTO client_traffics ({ct_cols_sql}) VALUES ({ct_qs_sql})",
                 tuple(ct_filtered.values()),
             )
+        else:
+            if "enable" in ct_cols:
+                conn.execute("UPDATE client_traffics SET enable = 1 WHERE id = ?", (ct_row[0],))
+
+    # Синхронизация с реляционными таблицами 3x-ui v3.x (clients + client_inbounds), откуда GetXrayConfig читает UUID
+    cl_cols = get_table_columns(conn, "clients")
+    if cl_cols and client_email and client_uuid and inbound_id:
+        now_ms = int(time.time() * 1000)
+        cl_row = conn.execute("SELECT id FROM clients WHERE email = ?", (client_email,)).fetchone()
+        if cl_row:
+            client_id = cl_row[0]
+            upd_map = {
+                "sub_id": "combain",
+                "uuid": client_uuid,
+                "flow": client_flow,
+                "enable": 1,
+                "tg_id": 0,
+                "updated_at": now_ms,
+            }
+            upd_filtered = {k: v for k, v in upd_map.items() if k in cl_cols}
+            if upd_filtered:
+                set_sql = ", ".join(f"{k}=?" for k in upd_filtered)
+                conn.execute(
+                    f"UPDATE clients SET {set_sql} WHERE id=?",
+                    (*upd_filtered.values(), client_id),
+                )
+        else:
+            ins_map = {
+                "email": client_email,
+                "sub_id": "combain",
+                "uuid": client_uuid,
+                "password": "",
+                "flow": client_flow,
+                "limit_ip": 0,
+                "limit_hwid": 0,
+                "total_gb": 0,
+                "expiry_time": 0,
+                "enable": 1,
+                "tg_id": 0,
+                "group_name": "",
+                "comment": "",
+                "reset": 0,
+                "traffic_reset": "never",
+                "traffic_reset_day": 1,
+                "created_at": now_ms,
+                "updated_at": now_ms,
+            }
+            ins_filtered = {k: v for k, v in ins_map.items() if k in cl_cols}
+            ins_cols_sql = ", ".join(ins_filtered.keys())
+            ins_qs_sql = ", ".join("?" for _ in ins_filtered)
+            cur_cl = conn.execute(
+                f"INSERT INTO clients ({ins_cols_sql}) VALUES ({ins_qs_sql})",
+                tuple(ins_filtered.values()),
+            )
+            client_id = cur_cl.lastrowid
+
+        ci_cols = get_table_columns(conn, "client_inbounds")
+        if ci_cols and client_id:
+            ci_row = conn.execute(
+                "SELECT 1 FROM client_inbounds WHERE client_id = ? AND inbound_id = ?",
+                (client_id, inbound_id),
+            ).fetchone()
+            if not ci_row:
+                ci_map = {
+                    "client_id": client_id,
+                    "inbound_id": inbound_id,
+                    "flow_override": client_flow,
+                    "created_at": now_ms,
+                }
+                ci_filtered = {k: v for k, v in ci_map.items() if k in ci_cols}
+                ci_cols_sql = ", ".join(ci_filtered.keys())
+                ci_qs_sql = ", ".join("?" for _ in ci_filtered)
+                conn.execute(
+                    f"INSERT INTO client_inbounds ({ci_cols_sql}) VALUES ({ci_qs_sql})",
+                    tuple(ci_filtered.values()),
+                )
+            elif "flow_override" in ci_cols:
+                conn.execute(
+                    "UPDATE client_inbounds SET flow_override = ? WHERE client_id = ? AND inbound_id = ?",
+                    (client_flow, client_id, inbound_id),
+                )
 
 
 def build_vless_settings(client_uuid: str, email: str, flow: str = "") -> dict:
@@ -276,13 +404,12 @@ def build_vless_settings(client_uuid: str, email: str, flow: str = "") -> dict:
                 "totalGB": 0,
                 "expiryTime": 0,
                 "enable": True,
-                "tgId": "",
+                "tgId": 0,
                 "subId": "combain",
                 "reset": 0,
             }
         ],
         "decryption": "none",
-        "fallbacks": [],
     }
 
 
@@ -341,6 +468,8 @@ def cmd_init_all(args: argparse.Namespace) -> int:
             settings_obj=build_vless_settings(args.uuid, "combain-reality", "xtls-rprx-vision"),
             stream_obj=reality_stream,
             client_email="combain-reality",
+            client_uuid=args.uuid,
+            client_flow="xtls-rprx-vision",
         )
 
         # 2-5. Инбаунды за Nginx для VK Cloud CDN и Yandex Cloud CDN (XHTTP + WS)
@@ -395,6 +524,13 @@ def cmd_init_all(args: argparse.Namespace) -> int:
                 settings_obj=build_vless_settings(args.uuid, email, ""),
                 stream_obj=stream,
                 client_email=email,
+                client_uuid=args.uuid,
+                client_flow="",
+            )
+
+        if get_table_columns(conn, "history_of_seeders"):
+            conn.execute(
+                "DELETE FROM history_of_seeders WHERE seeder_name IN ('ClientsTable', 'InboundClientTgIdFix2')"
             )
 
         conn.commit()
@@ -486,6 +622,27 @@ def _collect_vless_links(
                 ),
             )
         )
+        if args.ya_ws_path:
+            links.append(
+                (
+                    "VLESS-WS (резервный WebSocket через домен)",
+                    build_vless_uri(
+                        args.uuid,
+                        args.base_domain,
+                        443,
+                        {
+                            "encryption": "none",
+                            "type": "ws",
+                            "security": "tls",
+                            "sni": args.base_domain,
+                            "host": args.base_domain,
+                            "fp": "chrome",
+                            "path": f"/{args.ya_ws_path.lstrip('/')}",
+                        },
+                        _tag("Combain-Direct-WS"),
+                    ),
+                )
+            )
 
     if args.vk_cdn_domain:
         links.append(
