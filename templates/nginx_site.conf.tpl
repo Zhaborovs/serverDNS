@@ -27,6 +27,8 @@ server {
     http2 on;
     server_name ${BASE_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN};
     large_client_header_buffers 8 32k;
+    tcp_nodelay on;
+    keepalive_timeout 300s;
 
     ssl_certificate     /etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${BASE_DOMAIN}/privkey.pem;
@@ -70,19 +72,18 @@ server {
         proxy_set_header Host $host;
     }
 
-    # --- Yandex Cloud CDN (XHTTP и WebSocket) ---
+    # --- Основной скоростной XHTTP (h2c / stream-one + Yandex Cloud CDN) и WebSocket ---
     location ^~ /${XHTTP_YA_PATH} {
-        proxy_pass http://127.0.0.1:${XRAY_YA_XHTTP_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_request_buffering off;
-        gzip off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        grpc_pass grpc://127.0.0.1:${XRAY_YA_XHTTP_PORT};
+        grpc_socket_keepalive on;
+        grpc_read_timeout 3600s;
+        grpc_send_timeout 3600s;
+        grpc_buffer_size 64k;
         client_max_body_size 0;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        client_body_timeout 3600s;
+        client_body_buffer_size 512k;
+        grpc_set_header Host $host;
+        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
     location ^~ /${WS_YA_PATH} {

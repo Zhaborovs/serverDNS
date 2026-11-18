@@ -43,6 +43,16 @@ VK_GET_XHTTP_EXTRA = {
     "scMinPostsIntervalMs": "10-25",
 }
 
+# Anti-ТСПУ профиль XMUX для прямого XHTTP (удерживает все потоки YouTube/DNS в 1-2 H2-сессиях без всплесков коннектов)
+DIRECT_XHTTP_EXTRA = {
+    "xmux": {
+        "maxConnections": "1-2",
+        "cMaxReuseTimes": 0,
+        "hMaxRequestTimes": "800-1200",
+        "hMaxReusableSecs": "1800-3000",
+    }
+}
+
 
 def _x25519_clamp(scalar_bytes: bytes) -> int:
     b = bytearray(scalar_bytes)
@@ -477,6 +487,7 @@ DEFAULT_XRAY_TEMPLATE = {
         "rules": [
             {"inboundTag": ["api"], "outboundTag": "api", "type": "field"},
             {"ip": ["geoip:private"], "outboundTag": "blocked", "type": "field"},
+            {"network": "udp", "outboundTag": "blocked", "port": "443", "type": "field"},
             {"outboundTag": "blocked", "protocol": ["bittorrent"], "type": "field"},
         ],
     },
@@ -485,7 +496,7 @@ DEFAULT_XRAY_TEMPLATE = {
 
 
 def ensure_fast_ipv4_xray_template(conn: sqlite3.Connection) -> None:
-    """Включает встроенный быстрый IPv4 DNS (1.1.1.1/8.8.8.8) и UseIPv4 на freedom outbound."""
+    """Включает быстрый IPv4 DNS (1.1.1.1/8.8.8.8), UseIPv4 на freedom outbound и блокировку QUIC (udp:443)."""
     row = conn.execute("SELECT value FROM settings WHERE key = 'xrayTemplateConfig'").fetchone()
     tpl = None
     if row and row[0]:
@@ -522,6 +533,24 @@ def ensure_fast_ipv4_xray_template(conn: sqlite3.Connection) -> None:
                 sockopt["domainStrategy"] = "UseIPv4"
                 sockopt["tcpFastOpen"] = True
 
+    routing = tpl.setdefault("routing", {})
+    if not isinstance(routing, dict):
+        routing = {"domainStrategy": "AsIs", "rules": []}
+        tpl["routing"] = routing
+    rules = routing.setdefault("rules", [])
+    if not isinstance(rules, list):
+        rules = []
+        routing["rules"] = rules
+    has_quic_block = any(
+        isinstance(r, dict)
+        and r.get("network") == "udp"
+        and str(r.get("port", "")) == "443"
+        and r.get("outboundTag") == "blocked"
+        for r in rules
+    )
+    if not has_quic_block:
+        rules.append({"type": "field", "network": "udp", "port": "443", "outboundTag": "blocked"})
+
     upsert_setting(conn, "xrayTemplateConfig", json.dumps(tpl, indent=2))
 
 
@@ -536,7 +565,8 @@ def cmd_init_all(args: argparse.Namespace) -> int:
         upsert_setting(conn, "webBasePath", panel_path)
         ensure_fast_ipv4_xray_template(conn)
 
-        # 1. VLESS-Reality (127.0.0.1:20443, трафик приходит от sniproxy)
+        # 1. VLESS-Reality (127.0.0.1:20443, трафик приходит от sniproxy; Self-Steal проксирует веб на локальный Nginx)
+        reality_dest = args.reality_dest.strip() if getattr(args, "reality_dest", "") else f"{args.reality_sni}:443"
         reality_stream = {
             "network": "tcp",
             "security": "reality",
@@ -544,7 +574,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
             "realitySettings": {
                 "show": False,
                 "xver": 0,
-                "dest": f"{args.reality_sni}:443",
+                "dest": reality_dest,
                 "serverNames": [args.reality_sni],
                 "privateKey": args.reality_private_key,
                 "minClient": "",
@@ -697,8 +727,10 @@ def _collect_vless_links(
                 "sni": args.base_domain,
                 "host": args.base_domain,
                 "fp": "chrome",
+                "alpn": "h2",
                 "path": f"/{args.ya_xhttp_path.lstrip('/')}",
-                "mode": "packet-up",
+                "mode": "stream-one",
+                "extra": json.dumps(DIRECT_XHTTP_EXTRA, separators=(",", ":")),
             }
         else:
             direct_params = {
@@ -863,6 +895,7 @@ def main() -> int:
     p_init.add_argument("--panel-path", required=True)
     p_init.add_argument("--uuid", required=True)
     p_init.add_argument("--reality-sni", required=True)
+    p_init.add_argument("--reality-dest", default="")
     p_init.add_argument("--reality-private-key", required=True)
     p_init.add_argument("--reality-public-key", required=True)
     p_init.add_argument("--reality-short-id", required=True)

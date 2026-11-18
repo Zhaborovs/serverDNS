@@ -71,24 +71,24 @@ mod_sniproxy_sync_domains() {
         dns_rules="    # Single-domain режим: /dns-query проксируется через Nginx"
     fi
 
-    # Правила для VLESS-Reality (проверенный синтаксис .*domain$ без круглых скобок)
-    local whitelist_rules=""
+    # Режим Self-Steal Reality (REALITY_SNI == BASE_DOMAIN): sniproxy направляет BASE_DOMAIN в Xray Reality (20443),
+    # а Xray Reality при проверке обычного TLS прозрачно прокидывает веб-трафик/WS/XHTTP в Nginx (127.0.0.1:8443).
     local reality_port="${XRAY_REALITY_INTERNAL_PORT:-20443}"
-    local seen_sni=""
-    if [[ -n "${REALITY_SNI:-}" ]]; then
+    local nginx_port="${NGINX_INTERNAL_HTTPS_PORT:-8443}"
+    local base_target_port="$nginx_port"
+    local whitelist_rules=""
+
+    if [[ -n "${REALITY_SNI:-}" && "${REALITY_SNI}" == "${BASE_DOMAIN:-}" ]]; then
+        if ss -tln 2>/dev/null | grep -qE ":${reality_port}[[:space:]]"; then
+            base_target_port="$reality_port"
+        fi
+        whitelist_rules="    # Self-Steal режим: Reality работает на основном домене ${BASE_DOMAIN} -> 127.0.0.1:${base_target_port}"
+    elif [[ -n "${REALITY_SNI:-}" ]]; then
         local r_esc
         r_esc="$(_sniproxy_escape_regex "${REALITY_SNI}")"
-        whitelist_rules+="    .*${r_esc}\$ 127.0.0.1:${reality_port}"$'\n'
-        seen_sni="${REALITY_SNI}"
-    fi
-    if [[ -f "${PROJECT_ROOT}/config/presets/whitelist_sni.list" ]]; then
-        while IFS= read -r w_dom; do
-            w_dom="$(printf '%s' "$w_dom" | tr -d '\r' | xargs)"
-            [[ -z "$w_dom" || "$w_dom" == \#* || "$w_dom" == "$seen_sni" ]] && continue
-            local w_esc
-            w_esc="$(_sniproxy_escape_regex "$w_dom")"
-            whitelist_rules+="    .*${w_esc}\$ 127.0.0.1:${reality_port}"$'\n'
-        done < "${PROJECT_ROOT}/config/presets/whitelist_sni.list"
+        whitelist_rules="    .*${r_esc}\$ 127.0.0.1:${reality_port}"
+    else
+        whitelist_rules="    # Внешний Reality SNI не задан"
     fi
 
     # Правила обхода геоблокировок (строго из активного списка + агрегированные паттерны Google/MS)
@@ -116,15 +116,16 @@ mod_sniproxy_sync_domains() {
 
     # Безопасная сборка /etc/sniproxy.conf через python для точной подстановки многострочных блоков
     python3 - "${PROJECT_ROOT}/templates/sniproxy.conf.tpl" "/etc/sniproxy.conf" \
-        "$base_regex" "${NGINX_INTERNAL_HTTPS_PORT:-8443}" "$dns_rules" "$whitelist_rules" "$geo_rules" <<'PYEOF'
+        "$base_regex" "$nginx_port" "$base_target_port" "$dns_rules" "$whitelist_rules" "$geo_rules" <<'PYEOF'
 import sys
 from pathlib import Path
 
-tpl_path, out_path, base_rx, nginx_port, dns_rules, wl_rules, geo_rules = sys.argv[1:]
+tpl_path, out_path, base_rx, nginx_port, base_target_port, dns_rules, wl_rules, geo_rules = sys.argv[1:]
 content = Path(tpl_path).read_text(encoding="utf-8")
 content = (
     content.replace("${BASE_DOMAIN_REGEX}", base_rx)
     .replace("${NGINX_INTERNAL_HTTPS_PORT}", nginx_port)
+    .replace("${BASE_DOMAIN_TARGET_PORT}", base_target_port)
     .replace("${DNS_DOMAIN_RULES}", dns_rules.rstrip())
     .replace("${WHITELIST_SNI_RULES}", wl_rules.rstrip())
     .replace("${GEO_DOMAIN_RULES}", geo_rules.rstrip())

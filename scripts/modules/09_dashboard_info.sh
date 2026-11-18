@@ -130,11 +130,12 @@ mod_dashboard_qr_menu() {
         local xray_links=""
         xray_links="$(_dashboard_export_xray_links "$cur_ip")"
 
-        local reality_uri="" direct_xhttp_uri="" vk_cdn_uri="" ya_cdn_uri="" ya_ws_uri=""
+        local reality_uri="" direct_xhttp_uri="" direct_ws_uri="" vk_cdn_uri="" ya_cdn_uri="" ya_ws_uri=""
         while IFS= read -r line; do
             case "$line" in
                 *"#Combain-Reality")      reality_uri="${line#*: }" ;;
                 *"#Combain-Direct-XHTTP") direct_xhttp_uri="${line#*: }" ;;
+                *"#Combain-Direct-WS")    direct_ws_uri="${line#*: }" ;;
                 *"#VK-CDN-XHTTP")         vk_cdn_uri="${line#*: }" ;;
                 *"#Yandex-CDN-XHTTP")     ya_cdn_uri="${line#*: }" ;;
                 *"#Yandex-CDN-WS")        ya_ws_uri="${line#*: }" ;;
@@ -152,12 +153,12 @@ mod_dashboard_qr_menu() {
 
         echo ""
         echo -e "${BOLD}--- QR-коды подключений (выберите нужный) ---${NC}"
-        echo " 1) Единая подписка со всеми адресами (Happ / v2rayNG / Hiddify)"
-        echo " 2) VLESS-Reality (прямой с маскировкой)"
-        echo " 3) VLESS-XHTTP (прямой через домен)"
-        echo " 4) VK Cloud CDN (XHTTP GET-режим)"
-        echo " 5) Yandex Cloud CDN (XHTTP)"
-        echo " 6) Yandex Cloud CDN (WebSocket)"
+        echo " 1) Единая подписка со всеми адресами (Happ / v2RayTun / v2rayNG / Hiddify)"
+        echo " 2) VLESS-Reality (Self-Steal / прямой с маскировкой)"
+        echo " 3) VLESS-XHTTP (скоростной stream-one через домен)"
+        echo " 4) VLESS-WS (резервный WebSocket через домен)"
+        echo " 5) VK Cloud CDN (XHTTP GET-режим)"
+        echo " 6) Yandex Cloud CDN (XHTTP / WS)"
         echo " 7) AmneziaWG 3.1 (выбор клиентского профиля)"
         echo " 8) Telegram MTProto Proxy"
         echo " 9) Telegram SOCKS5 Proxy"
@@ -168,7 +169,7 @@ mod_dashboard_qr_menu() {
         case "$qr_choice" in
             1)
                 if [[ -n "$sub_uri" ]]; then
-                    _qr_show_payload "QR-код Единой подписки (Happ / v2rayNG / Hiddify)" "$sub_uri"
+                    _qr_show_payload "QR-код Единой подписки (Happ / v2RayTun / v2rayNG)" "$sub_uri"
                 else
                     log_warn "Единая подписка еще не сформирована (проверьте BASE_DOMAIN и модуль 05)."
                     shown="false"
@@ -184,13 +185,21 @@ mod_dashboard_qr_menu() {
                 ;;
             3)
                 if [[ -n "$direct_xhttp_uri" ]]; then
-                    _qr_show_payload "QR-код VLESS-XHTTP (Direct)" "$direct_xhttp_uri"
+                    _qr_show_payload "QR-код VLESS-XHTTP (Direct stream-one)" "$direct_xhttp_uri"
                 else
                     log_warn "Прямая ссылка XHTTP еще не сгенерирована (проверьте BASE_DOMAIN и модуль 05)."
                     shown="false"
                 fi
                 ;;
             4)
+                if [[ -n "$direct_ws_uri" ]]; then
+                    _qr_show_payload "QR-код VLESS-WS (Direct WebSocket)" "$direct_ws_uri"
+                else
+                    log_warn "Прямая ссылка WS еще не сгенерирована (проверьте BASE_DOMAIN и модуль 05)."
+                    shown="false"
+                fi
+                ;;
+            5)
                 if [[ -n "$vk_cdn_uri" ]]; then
                     _qr_show_payload "QR-код VK Cloud CDN (XHTTP GET)" "$vk_cdn_uri"
                 else
@@ -198,17 +207,10 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            5)
+            6)
                 if [[ -n "$ya_cdn_uri" ]]; then
                     _qr_show_payload "QR-код Yandex Cloud CDN (XHTTP)" "$ya_cdn_uri"
-                else
-                    log_warn "Домен Yandex Cloud CDN не настроен. Задайте его в меню: 5 -> 1."
-                    shown="false"
-                fi
-                ;;
-            6)
-                if [[ -n "$ya_ws_uri" ]]; then
-                    _qr_show_payload "QR-код Yandex Cloud CDN (WS)" "$ya_ws_uri"
+                    [[ -n "$ya_ws_uri" ]] && _qr_show_payload "QR-код Yandex Cloud CDN (WS)" "$ya_ws_uri"
                 else
                     log_warn "Домен Yandex Cloud CDN не настроен. Задайте его в меню: 5 -> 1."
                     shown="false"

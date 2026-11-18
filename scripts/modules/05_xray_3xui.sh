@@ -50,6 +50,15 @@ _xray_find_best_sni() {
 }
 
 _xray_auto_select_reality_sni() {
+    state_load_silent
+    if [[ -n "${BASE_DOMAIN:-}" && -f "/etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem" ]]; then
+        log_ok "Доступен режим Self-Steal Reality на вашем домене: ${BASE_DOMAIN} -> 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT:-8443}"
+        echo "  (Рекомендуется против ТСПУ РКН: нет конфликта чужих ASN при 50+ параллельных потоках YouTube)"
+        read -rp "Использовать Self-Steal '${BASE_DOMAIN}' или ввести внешний SNI? [Enter = ${BASE_DOMAIN}]: " custom_sni
+        state_set "REALITY_SNI" "${custom_sni:-${BASE_DOMAIN}}"
+        return 0
+    fi
+
     log_info "Авто-проверка доменов из белого списка для VLESS-Reality (TLS 1.3 + HTTP/2)..."
     _xray_find_best_sni "true"
 
@@ -68,6 +77,22 @@ _xray_heal_reality_sni_if_needed() {
     fi
     state_load_silent
     local cur_sni="${REALITY_SNI:-}"
+
+    # При наличии валидного сертификата BASE_DOMAIN приоритетно используем Self-Steal Reality
+    # вместо чужих глобальных CDN (microsoft/google/apple), которые ТСПУ режет при всплеске параллельных потоков.
+    if [[ -n "${BASE_DOMAIN:-}" && -f "/etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem" ]]; then
+        if [[ "$cur_sni" == "${BASE_DOMAIN}" ]]; then
+            return 0
+        fi
+        case "$cur_sni" in
+            ""|"www.microsoft.com"|"dl.google.com"|"www.apple.com"|"addons.mozilla.org"|"sun9-73.userapi.com")
+                state_set "REALITY_SNI" "${BASE_DOMAIN}"
+                log_ok "Reality переведен в режим Self-Steal (SNI=${BASE_DOMAIN} -> 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT:-8443}) против троттлинга ТСПУ."
+                return 0
+                ;;
+        esac
+    fi
+
     local code="000"
     if [[ -n "$cur_sni" ]]; then
         code="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code}" "https://${cur_sni}/" 2>/dev/null || true)"
@@ -140,6 +165,12 @@ mod_xray_apply_inbounds() {
         return 1
     fi
 
+    local reality_port="${XRAY_REALITY_INTERNAL_PORT:-20443}"
+    local reality_dest="${REALITY_SNI}:443"
+    if [[ -n "${BASE_DOMAIN:-}" && "${REALITY_SNI}" == "${BASE_DOMAIN}" ]]; then
+        reality_dest="127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT:-8443}"
+    fi
+
     # Останавливаем контейнер на время безопасного патчинга БД x-ui.db
     docker stop combain-3xui >/dev/null 2>&1 || true
 
@@ -149,10 +180,11 @@ mod_xray_apply_inbounds() {
         --panel-path "${SECRET_PANEL_PATH}" \
         --uuid "${MAIN_CLIENT_UUID}" \
         --reality-sni "${REALITY_SNI}" \
+        --reality-dest "$reality_dest" \
         --reality-private-key "${REALITY_PRIVATE_KEY}" \
         --reality-public-key "${REALITY_PUBLIC_KEY}" \
         --reality-short-id "${REALITY_SHORT_ID}" \
-        --reality-port "${XRAY_REALITY_INTERNAL_PORT:-20443}" \
+        --reality-port "$reality_port" \
         --vk-xhttp-port "${XRAY_VK_XHTTP_PORT:-20444}" \
         --vk-xhttp-path "${XHTTP_VK_PATH}" \
         --vk-ws-port "${XRAY_VK_WS_PORT:-20445}" \
@@ -167,6 +199,22 @@ mod_xray_apply_inbounds() {
         docker compose --env-file "$STATE_FILE" -f "${STATE_DIR}/docker-compose.yml" up -d --force-recreate 3x-ui >/dev/null
     else
         docker start combain-3xui >/dev/null
+    fi
+
+    # Дожидаемся открытия порта Reality внутри Xray перед синхронизацией sniproxy
+    for _ in $(seq 1 12); do
+        if ss -tln 2>/dev/null | grep -qE ":${reality_port}[[:space:]]"; then
+            break
+        fi
+        sleep 0.5
+    done
+
+    # Синхронизируем конфиг Nginx (grpc_pass h2c для скоростного XHTTP + подписка)
+    if declare -f _render_nginx_conf >/dev/null 2>&1; then
+        _render_nginx_conf
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^combain-nginx$'; then
+            docker exec combain-nginx nginx -s reload >/dev/null 2>&1 || docker restart combain-nginx >/dev/null 2>&1 || true
+        fi
     fi
 
     if declare -f mod_sniproxy_sync_domains >/dev/null 2>&1; then
