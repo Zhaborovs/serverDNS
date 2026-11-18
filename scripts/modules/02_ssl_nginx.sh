@@ -44,16 +44,105 @@ _generate_noise_chunks() {
     mkdir -p "$chunks_dir"
 
     if [[ ! -f "${chunks_dir}/abr_stream.bin" ]]; then
-        log_info "Генерация бинарного сегмента медиа-шума (2 МБ) для /videoplayback..."
+        log_info "Генерация бинарного сегмента медиа-потока (2 МБ) для /videoplayback..."
         # Псевдо-заголовок ISO MP4 (ftypisom) + криптографически случайный контент
         printf '\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2avc1mp41' > "${chunks_dir}/abr_stream.bin"
         dd if=/dev/urandom bs=1024 count=2048 status=none >> "${chunks_dir}/abr_stream.bin"
     fi
 
     if [[ ! -f "${chunks_dir}/cloud_blob.bin" ]]; then
-        log_info "Генерация бинарного блока синхронизации (1 МБ) для /cloud-sync..."
+        log_info "Генерация бинарного блока (1 МБ) для /cloud-sync..."
         dd if=/dev/urandom bs=1024 count=1024 status=none > "${chunks_dir}/cloud_blob.bin"
     fi
+
+    if [[ ! -f "${chunks_dir}/speedtest_8m.bin" ]]; then
+        log_info "Генерация тестового файла (8 МБ) для замера скорости Download..."
+        dd if=/dev/urandom bs=1024 count=8192 status=none > "${chunks_dir}/speedtest_8m.bin"
+    fi
+}
+
+_prepare_cat_videos() {
+    local cats_dir="${STATE_DIR}/nginx/decoy/cats"
+    mkdir -p "$cats_dir"
+
+    # 1. Копируем пользовательские .mp4/.webm/.gif из репозитория (если добавлены вручную)
+    if [[ -d "${PROJECT_ROOT}/web/decoy_game/cats" ]]; then
+        find "${PROJECT_ROOT}/web/decoy_game/cats" -maxdepth 1 -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.gif" \) \
+            -exec cp -u {} "$cats_dir/" \; 2>/dev/null || true
+    fi
+
+    # 2. Считаем текущее количество валидных медиа-котиков
+    local current_count
+    current_count="$(find "$cats_dir" -maxdepth 1 -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.gif" \) -size +15k 2>/dev/null | wc -l)"
+
+    if [[ "$current_count" -lt 10 ]]; then
+        log_info "Загрузка локального пака видео/анимаций котиков для рогалика (текущих: ${current_count}, цель: 10)..."
+        local ua="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+
+        # Пробуем пару легких .webm роликов с Wikimedia Commons
+        local -A wiki_clips=(
+            ["cat_meow.webm"]="https://upload.wikimedia.org/wikipedia/commons/3/37/Cat_meowing_into_camera.webm"
+            ["cat_play.webm"]="https://upload.wikimedia.org/wikipedia/commons/e/e0/Ma%C4%8Dka_164113.webm"
+        )
+        for fname in "${!wiki_clips[@]}"; do
+            if [[ ! -s "${cats_dir}/${fname}" ]]; then
+                curl -4 -fsSL --connect-timeout 5 --max-time 15 -A "$ua" "${wiki_clips[$fname]}" -o "${cats_dir}/${fname}.tmp" 2>/dev/null || true
+                if [[ -s "${cats_dir}/${fname}.tmp" ]] && [[ "$(wc -c < "${cats_dir}/${fname}.tmp")" -gt 15000 ]]; then
+                    mv "${cats_dir}/${fname}.tmp" "${cats_dir}/${fname}"
+                else
+                    rm -f "${cats_dir}/${fname}.tmp"
+                fi
+            fi
+        done
+
+        # Добираем уникальные GIF-анимации с CATAAS (проверяя заголовок GIF8 и дедупликацию по md5)
+        local seen_hashes=""
+        for existing in "$cats_dir"/*; do
+            [[ -f "$existing" ]] && seen_hashes+="$(md5sum "$existing" 2>/dev/null | awk '{print $1}') "
+        done
+
+        local idx=1
+        local tries=0
+        while [[ "$(find "$cats_dir" -maxdepth 1 -type f \( -iname "*.mp4" -o -iname "*.webm" -o -iname "*.gif" \) -size +15k 2>/dev/null | wc -l)" -lt 10 ]] && [[ "$tries" -lt 18 ]]; do
+            tries=$((tries + 1))
+            local target="${cats_dir}/cat_${idx}.gif"
+            while [[ -f "$target" ]]; do
+                idx=$((idx + 1))
+                target="${cats_dir}/cat_${idx}.gif"
+            done
+            local tmp_f="${target}.tmp"
+            curl -4 -fsSL --connect-timeout 4 --max-time 10 -A "$ua" "https://cataas.com/cat/gif?t=${tries}_$$" -o "$tmp_f" 2>/dev/null || true
+            if [[ -s "$tmp_f" ]] && [[ "$(wc -c < "$tmp_f")" -gt 15000 ]] && head -c 4 "$tmp_f" | grep -q "GIF8"; then
+                local h
+                h="$(md5sum "$tmp_f" | awk '{print $1}')"
+                if [[ "$seen_hashes" != *"$h"* ]]; then
+                    mv "$tmp_f" "$target"
+                    seen_hashes+="${h} "
+                    idx=$((idx + 1))
+                else
+                    rm -f "$tmp_f"
+                fi
+            else
+                rm -f "$tmp_f"
+            fi
+        done
+    fi
+
+    # 3. Генерируем manifest.json для фронтенда
+    python3 - "$cats_dir" <<'PYEOF'
+import json, sys
+from pathlib import Path
+
+cats_dir = Path(sys.argv[1])
+exts = {".mp4", ".webm", ".gif"}
+files = sorted(
+    f"/cats/{p.name}"
+    for p in cats_dir.iterdir()
+    if p.is_file() and p.suffix.lower() in exts and p.stat().st_size > 15000
+)
+(cats_dir / "manifest.json").write_text(json.dumps(files, indent=2), encoding="utf-8")
+print(f"[OK] Пак видео-котиков готов: {len(files)} файлов в {cats_dir}")
+PYEOF
 }
 
 _check_regru_dns_loop() {
@@ -144,6 +233,21 @@ _issue_ssl_certificate() {
     log_ok "SSL-сертификат успешно получен!"
 }
 
+mod_ssl_nginx_update_decoy() {
+    log_step "Обновление сайта-заглушки, эндпоинтов SpeedTest и пака видео-котиков"
+    state_load_silent
+    local nginx_dir="${STATE_DIR}/nginx"
+    mkdir -p "${nginx_dir}/conf.d" "${nginx_dir}/decoy/chunks" "${nginx_dir}/decoy/cats"
+    cp -a "${PROJECT_ROOT}/web/decoy_game/." "${nginx_dir}/decoy/"
+    _generate_noise_chunks
+    _prepare_cat_videos
+    _render_nginx_conf
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^combain-nginx$'; then
+        docker exec combain-nginx nginx -s reload >/dev/null 2>&1 || docker restart combain-nginx >/dev/null
+    fi
+    log_ok "Сайт-заглушка и медиапак обновлены!"
+}
+
 mod_ssl_nginx_setup() {
     log_step "Модуль 02: Проверка DNS, выпуск SSL-сертификата и запуск Nginx + Заглушки"
     state_load_silent
@@ -152,6 +256,7 @@ mod_ssl_nginx_setup() {
     mkdir -p "${nginx_dir}/conf.d" "${nginx_dir}/decoy" /var/www/certbot
     cp -a "${PROJECT_ROOT}/web/decoy_game/." "${nginx_dir}/decoy/"
     _generate_noise_chunks
+    _prepare_cat_videos
 
     _check_regru_dns_loop
     _issue_ssl_certificate
@@ -165,5 +270,5 @@ mod_ssl_nginx_setup() {
 }
 
 mod_ssl_nginx_toggle_noise_daemon() {
-    log_info "Серверный исходящий генератор шума отключен по архитектуре — генерация работает в браузерном клиенте сайта-заглушки (/videoplayback и /cloud-sync)."
+    mod_ssl_nginx_update_decoy
 }

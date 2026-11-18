@@ -110,7 +110,7 @@ menu_vpn_management() {
     echo " 1) Настроить/обновить домены VK Cloud CDN и Yandex Cloud CDN"
     echo " 2) Добавить клиента AmneziaWG (AWG 2.0+) и показать .conf / vpn:// / QR"
     echo " 3) Пересоздать ключи / порты Telegram Proxy (MTProto + SOCKS5)"
-    echo " 4) Переключить фоновый серверный генератор сетевого шума"
+    echo " 4) Обновить файлы сайта-заглушки и загрузить пак видео-котиков"
     echo " 5) Показать инструкцию по настройке VK/Yandex CDN"
     echo " 0) Назад"
     read -rp "Выберите действие [0-5]: " vpn_choice
@@ -118,7 +118,7 @@ menu_vpn_management() {
         1) mod_xray_configure_cdn_domains ;;
         2) mod_amneziawg_add_client ;;
         3) mod_telegram_proxy_setup "regen" ;;
-        4) mod_ssl_nginx_toggle_noise_daemon ;;
+        4) mod_ssl_nginx_update_decoy ;;
         5) less "${PROJECT_ROOT}/docs/cdn_whitelist_guide.md" || cat "${PROJECT_ROOT}/docs/cdn_whitelist_guide.md" ;;
         0) return 0 ;;
         *) log_warn "Неверный выбор." ;;

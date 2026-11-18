@@ -4,11 +4,17 @@
 # ==============================================================================
 
 server {
-    listen 80;
+    listen 80 default_server;
     server_name ${BASE_DOMAIN} ${DNS_DOMAIN};
+    client_max_body_size 32m;
 
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/certbot;
+    }
+
+    location = /speedtest/sink {
+        access_log off;
+        return 204;
     }
 
     location / {
@@ -87,7 +93,31 @@ server {
         proxy_set_header Host $host;
     }
 
-    # --- Эмуляция медиа-чанков (ABR-профиль YouTube/HLS) ---
+    # --- Сервис проверки скорости NetPulse (Download / Upload / Ping) ---
+    location = /speedtest/ping {
+        access_log off;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        return 204;
+    }
+
+    location = /speedtest/down {
+        access_log off;
+        default_type application/octet-stream;
+        alias /usr/share/nginx/decoy/chunks/speedtest_8m.bin;
+        add_header Accept-Ranges bytes;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        add_header X-Content-Type-Options nosniff;
+    }
+
+    location = /speedtest/up {
+        access_log off;
+        client_max_body_size 16m;
+        client_body_buffer_size 8m;
+        proxy_request_buffering on;
+        proxy_pass http://127.0.0.1:80/speedtest/sink;
+    }
+
+    # --- Эмуляция медиа-сегментов для длительного теста стабильности 4K-потока ---
     location = /videoplayback {
         access_log off;
         default_type video/mp4;
@@ -97,7 +127,7 @@ server {
         add_header X-Content-Type-Options nosniff;
     }
 
-    # --- Эмуляция синхронизации облачного диска (Google/Яндекс.Диск профиль) ---
+    # --- Эмуляция синхронизации блока данных ---
     location = /cloud-sync {
         access_log off;
         default_type application/octet-stream;
@@ -105,7 +135,13 @@ server {
         add_header Accept-Ranges bytes;
         add_header Cache-Control "no-store, no-cache, must-revalidate";
         add_header X-Content-Type-Options nosniff;
-        add_header X-Cloud-Sync "chunk-ok";
+    }
+
+    # --- Локальная коллекция видео/анимаций котиков для карт рогалика ---
+    location ^~ /cats/ {
+        access_log off;
+        root /usr/share/nginx/decoy;
+        add_header Cache-Control "public, max-age=3600";
     }
 
     # --- Fallback DoH на основном домене (для режима single domain) ---
