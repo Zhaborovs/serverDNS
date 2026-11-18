@@ -160,6 +160,12 @@ def upsert_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
 
 
+def get_table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    """Возвращает множество реально существующих колонок в SQLite-таблице."""
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row[1] for row in rows}
+
+
 def upsert_inbound(
     conn: sqlite3.Connection,
     tag: str,
@@ -169,6 +175,7 @@ def upsert_inbound(
     protocol: str,
     settings_obj: dict,
     stream_obj: dict,
+    client_email: str = "",
 ) -> None:
     sniffing_obj = {
         "enabled": True,
@@ -178,50 +185,73 @@ def upsert_inbound(
     }
     allocate_obj = {"strategy": "always", "refresh": 5, "concurrency": 3}
 
+    inb_cols = get_table_columns(conn, "inbounds")
+    all_fields = {
+        "user_id": 1,
+        "up": 0,
+        "down": 0,
+        "total": 0,
+        "remark": remark,
+        "enable": 1,
+        "expiry_time": 0,
+        "listen": listen,
+        "port": port,
+        "protocol": protocol,
+        "settings": json.dumps(settings_obj, separators=(",", ":")),
+        "stream_settings": json.dumps(stream_obj, separators=(",", ":")),
+        "tag": tag,
+        "sniffing": json.dumps(sniffing_obj, separators=(",", ":")),
+        "allocate": json.dumps(allocate_obj, separators=(",", ":")),
+        "traffic_reset": "never",
+    }
+    filtered_fields = {k: v for k, v in all_fields.items() if k in inb_cols}
+
     cur = conn.execute("SELECT id FROM inbounds WHERE tag = ? OR port = ?", (tag, port))
     row = cur.fetchone()
     if row:
         inbound_id = row[0]
+        update_fields = {k: v for k, v in filtered_fields.items() if k not in {"up", "down", "total"}}
+        set_clause = ", ".join(f"{k}=?" for k in update_fields)
         conn.execute(
-            """
-            UPDATE inbounds
-            SET user_id=1, remark=?, enable=1, listen=?, port=?, protocol=?,
-                settings=?, stream_settings=?, tag=?, sniffing=?, allocate=?
-            WHERE id=?
-            """,
-            (
-                remark,
-                listen,
-                port,
-                protocol,
-                json.dumps(settings_obj, separators=(",", ":")),
-                json.dumps(stream_obj, separators=(",", ":")),
-                tag,
-                json.dumps(sniffing_obj, separators=(",", ":")),
-                json.dumps(allocate_obj, separators=(",", ":")),
-                inbound_id,
-            ),
+            f"UPDATE inbounds SET {set_clause} WHERE id=?",
+            (*update_fields.values(), inbound_id),
         )
     else:
-        conn.execute(
-            """
-            INSERT INTO inbounds
-            (user_id, up, down, total, remark, enable, expiry_time, listen, port,
-             protocol, settings, stream_settings, tag, sniffing, allocate)
-            VALUES (1, 0, 0, 0, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                remark,
-                listen,
-                port,
-                protocol,
-                json.dumps(settings_obj, separators=(",", ":")),
-                json.dumps(stream_obj, separators=(",", ":")),
-                tag,
-                json.dumps(sniffing_obj, separators=(",", ":")),
-                json.dumps(allocate_obj, separators=(",", ":")),
-            ),
+        cols_sql = ", ".join(filtered_fields.keys())
+        qs_sql = ", ".join("?" for _ in filtered_fields)
+        insert_cur = conn.execute(
+            f"INSERT INTO inbounds ({cols_sql}) VALUES ({qs_sql})",
+            tuple(filtered_fields.values()),
         )
+        inbound_id = insert_cur.lastrowid
+
+    # Синхронно создаем запись клиента в client_traffics для корректного отображения в UI 3x-ui
+    ct_cols = get_table_columns(conn, "client_traffics")
+    if ct_cols and client_email and inbound_id:
+        ct_row = conn.execute(
+            "SELECT id FROM client_traffics WHERE inbound_id = ? AND email = ?",
+            (inbound_id, client_email),
+        ).fetchone()
+        if not ct_row:
+            ct_fields = {
+                "inbound_id": inbound_id,
+                "enable": 1,
+                "email": client_email,
+                "up": 0,
+                "down": 0,
+                "expiry_time": 0,
+                "total": 0,
+                "reset": 0,
+                "all_time": 0,
+                "last_online": 0,
+            }
+            ct_filtered = {k: v for k, v in ct_fields.items() if k in ct_cols}
+            ct_cols_sql = ", ".join(ct_filtered.keys())
+            ct_qs_sql = ", ".join("?" for _ in ct_filtered)
+            conn.execute(
+                f"INSERT INTO client_traffics ({ct_cols_sql}) VALUES ({ct_qs_sql})",
+                tuple(ct_filtered.values()),
+            )
 
 
 def build_vless_settings(client_uuid: str, email: str, flow: str = "") -> dict:
@@ -299,6 +329,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
             protocol="vless",
             settings_obj=build_vless_settings(args.uuid, "combain-reality", "xtls-rprx-vision"),
             stream_obj=reality_stream,
+            client_email="combain-reality",
         )
 
         # 2-5. Инбаунды за Nginx для VK Cloud CDN и Yandex Cloud CDN (XHTTP + WS)
@@ -332,6 +363,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
                 protocol="vless",
                 settings_obj=build_vless_settings(args.uuid, email, ""),
                 stream_obj=stream,
+                client_email=email,
             )
 
         conn.commit()

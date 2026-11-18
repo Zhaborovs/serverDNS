@@ -96,13 +96,12 @@ def generate_psk() -> str:
 
 
 def generate_awg2_params() -> dict[str, str | int]:
-    """Генерирует валидный набор параметров обфускации AWG 2.0+ (с обратной совместимостью)."""
+    """Генерирует валидный набор параметров обфускации AWG (совместимый с 1.5/2.0+/3.0)."""
     s1 = random.randint(15, 110)
     s2 = random.randint(15, 110)
     while s1 + 56 == s2 or s1 == s2:
         s2 = random.randint(15, 110)
 
-    base = random.randint(100000, 900000)
     return {
         "Jc": random.randint(4, 8),
         "Jmin": 40,
@@ -111,10 +110,10 @@ def generate_awg2_params() -> dict[str, str | int]:
         "S2": s2,
         "S3": random.randint(8, 64),
         "S4": random.randint(4, 32),
-        "H1": f"{base}-{base + 45000}",
-        "H2": f"{base + 100000}-{base + 145000}",
-        "H3": f"{base + 200000}-{base + 245000}",
-        "H4": f"{base + 300000}-{base + 345000}",
+        "H1": random.randint(100000000, 499999999),
+        "H2": random.randint(600000000, 999999999),
+        "H3": random.randint(1100000000, 1499999999),
+        "H4": random.randint(1600000000, 2099999999),
         "I1": "<b 0xc0000000><r 16><t><r 24>",
         "I2": "<b 0x16030100><rc 6><r 20>",
         "I3": "<rc 8><t><r 18>",
@@ -130,32 +129,31 @@ def encode_amnezia_vpn_uri(
     port: int,
     dns_ip: str,
     client_name: str,
+    legacy_s12: bool = False,
 ) -> str:
     """Кодирует конфиг в нативный формат vpn:// (qCompress + URL-safe Base64) для приложения AmneziaVPN."""
+    awg_block: dict[str, str] = {
+        "H1": str(params["H1"]),
+        "H2": str(params["H2"]),
+        "H3": str(params["H3"]),
+        "H4": str(params["H4"]),
+        "Jc": str(params["Jc"]),
+        "Jmin": str(params["Jmin"]),
+        "Jmax": str(params["Jmax"]),
+        "S1": str(params["S1"]),
+        "S2": str(params["S2"]),
+        "last_config": client_conf_text,
+        "port": str(port),
+        "transport_proto": "udp",
+    }
+    if not legacy_s12:
+        for k in ("S3", "S4", "I1", "I2", "I3", "I4", "I5"):
+            awg_block[k] = str(params[k])
+
     payload = {
         "containers": [
             {
-                "awg": {
-                    "H1": str(params["H1"]),
-                    "H2": str(params["H2"]),
-                    "H3": str(params["H3"]),
-                    "H4": str(params["H4"]),
-                    "Jc": str(params["Jc"]),
-                    "Jmin": str(params["Jmin"]),
-                    "Jmax": str(params["Jmax"]),
-                    "S1": str(params["S1"]),
-                    "S2": str(params["S2"]),
-                    "S3": str(params["S3"]),
-                    "S4": str(params["S4"]),
-                    "I1": str(params["I1"]),
-                    "I2": str(params["I2"]),
-                    "I3": str(params["I3"]),
-                    "I4": str(params["I4"]),
-                    "I5": str(params["I5"]),
-                    "last_config": client_conf_text,
-                    "port": str(port),
-                    "transport_proto": "udp",
-                },
+                "awg": awg_block,
                 "container": "amnezia-awg",
             }
         ],
@@ -186,6 +184,7 @@ def write_server_conf(registry: dict, conf_path: Path) -> None:
     """Пересобирает серверный конфиг /etc/amnezia/amneziawg/awg0.conf из реестра."""
     p = registry["params"]
     iface = registry["interface"]
+    legacy_s12 = bool(registry.get("legacy_s12", False))
     lines = [
         "[Interface]",
         f"Address = {registry['server_ip_cidr']}",
@@ -196,16 +195,20 @@ def write_server_conf(registry: dict, conf_path: Path) -> None:
         f"Jmax = {p['Jmax']}",
         f"S1 = {p['S1']}",
         f"S2 = {p['S2']}",
-        f"S3 = {p['S3']}",
-        f"S4 = {p['S4']}",
-        f"H1 = {p['H1']}",
-        f"H2 = {p['H2']}",
-        f"H3 = {p['H3']}",
-        f"H4 = {p['H4']}",
-        f"PostUp = iptables -A FORWARD -i {iface} -j ACCEPT; iptables -A FORWARD -o {iface} -j ACCEPT; iptables -t nat -A POSTROUTING -s {registry['subnet']} -j MASQUERADE",
-        f"PostDown = iptables -D FORWARD -i {iface} -j ACCEPT; iptables -D FORWARD -o {iface} -j ACCEPT; iptables -t nat -D POSTROUTING -s {registry['subnet']} -j MASQUERADE",
-        "",
     ]
+    if not legacy_s12:
+        lines.extend([f"S3 = {p['S3']}", f"S4 = {p['S4']}"])
+    lines.extend(
+        [
+            f"H1 = {p['H1']}",
+            f"H2 = {p['H2']}",
+            f"H3 = {p['H3']}",
+            f"H4 = {p['H4']}",
+            f"PostUp = iptables -A FORWARD -i {iface} -j ACCEPT; iptables -A FORWARD -o {iface} -j ACCEPT; iptables -t nat -A POSTROUTING -s {registry['subnet']} -j MASQUERADE",
+            f"PostDown = iptables -D FORWARD -i {iface} -j ACCEPT; iptables -D FORWARD -o {iface} -j ACCEPT; iptables -t nat -D POSTROUTING -s {registry['subnet']} -j MASQUERADE",
+            "",
+        ]
+    )
     for client in registry.get("clients", []):
         lines.extend(
             [
@@ -229,6 +232,7 @@ def write_server_conf(registry: dict, conf_path: Path) -> None:
 def render_client_artifacts(registry: dict, client: dict, clients_dir: Path) -> tuple[Path, Path]:
     """Создает файлы <name>.conf и <name>.vpn для конкретного клиента."""
     p = registry["params"]
+    legacy_s12 = bool(registry.get("legacy_s12", False))
     conf_lines = [
         "[Interface]",
         f"PrivateKey = {client['private_key']}",
@@ -240,26 +244,39 @@ def render_client_artifacts(registry: dict, client: dict, clients_dir: Path) -> 
         f"Jmax = {p['Jmax']}",
         f"S1 = {p['S1']}",
         f"S2 = {p['S2']}",
-        f"S3 = {p['S3']}",
-        f"S4 = {p['S4']}",
-        f"H1 = {p['H1']}",
-        f"H2 = {p['H2']}",
-        f"H3 = {p['H3']}",
-        f"H4 = {p['H4']}",
-        f"I1 = {p['I1']}",
-        f"I2 = {p['I2']}",
-        f"I3 = {p['I3']}",
-        f"I4 = {p['I4']}",
-        f"I5 = {p['I5']}",
-        "",
-        "[Peer]",
-        f"PublicKey = {registry['server_public_key']}",
-        f"PresharedKey = {client['psk']}",
-        f"Endpoint = {registry['endpoint_ip']}:{registry['port']}",
-        "AllowedIPs = 0.0.0.0/0, ::/0",
-        "PersistentKeepalive = 25",
-        "",
     ]
+    if not legacy_s12:
+        conf_lines.extend([f"S3 = {p['S3']}", f"S4 = {p['S4']}"])
+    conf_lines.extend(
+        [
+            f"H1 = {p['H1']}",
+            f"H2 = {p['H2']}",
+            f"H3 = {p['H3']}",
+            f"H4 = {p['H4']}",
+        ]
+    )
+    if not legacy_s12:
+        conf_lines.extend(
+            [
+                f"I1 = {p['I1']}",
+                f"I2 = {p['I2']}",
+                f"I3 = {p['I3']}",
+                f"I4 = {p['I4']}",
+                f"I5 = {p['I5']}",
+            ]
+        )
+    conf_lines.extend(
+        [
+            "",
+            "[Peer]",
+            f"PublicKey = {registry['server_public_key']}",
+            f"PresharedKey = {client['psk']}",
+            f"Endpoint = {registry['endpoint_ip']}:{registry['port']}",
+            "AllowedIPs = 0.0.0.0/0, ::/0",
+            "PersistentKeepalive = 25",
+            "",
+        ]
+    )
     conf_text = "\n".join(conf_lines)
     clients_dir.mkdir(parents=True, exist_ok=True)
     conf_file = clients_dir / f"awg_{client['name']}.conf"
@@ -273,6 +290,7 @@ def render_client_artifacts(registry: dict, client: dict, clients_dir: Path) -> 
         int(registry["port"]),
         registry["dns_ip"],
         client["name"],
+        legacy_s12=legacy_s12,
     )
     vpn_file.write_text(vpn_uri, encoding="utf-8")
     return conf_file, vpn_file
@@ -361,6 +379,17 @@ def cmd_update_endpoint(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_set_legacy_s12(args: argparse.Namespace) -> int:
+    reg = load_registry(args.registry)
+    reg["legacy_s12"] = True
+    save_registry(args.registry, reg)
+    write_server_conf(reg, args.server_conf)
+    for client in reg.get("clients", []):
+        render_client_artifacts(reg, client, args.clients_dir)
+    print(f"[OK] Включен режим совместимости S1/S2 для {args.server_conf} и {len(reg.get('clients', []))} клиентов.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AmneziaWG 2.0+ Config & vpn:// Generator")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -387,12 +416,18 @@ def main() -> int:
     p_upd.add_argument("--clients-dir", type=Path, default=Path("/etc/server-combain/clients"))
     p_upd.add_argument("--new-ip", required=True)
 
+    p_leg = subparsers.add_parser("set-legacy-s12", help="Переключить конфиги в режим совместимости S1/S2")
+    p_leg.add_argument("--registry", type=Path, default=Path("/etc/server-combain/awg/registry.json"))
+    p_leg.add_argument("--server-conf", type=Path, default=Path("/etc/amnezia/amneziawg/awg0.conf"))
+    p_leg.add_argument("--clients-dir", type=Path, default=Path("/etc/server-combain/clients"))
+
     args = parser.parse_args()
     handlers = {
         "gen-params": cmd_gen_params,
         "init-server": cmd_init_server,
         "add-client": cmd_add_client,
         "update-endpoint": cmd_update_endpoint,
+        "set-legacy-s12": cmd_set_legacy_s12,
     }
     return handlers[args.command](args)
 

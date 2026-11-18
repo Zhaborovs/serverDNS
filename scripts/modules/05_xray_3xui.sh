@@ -29,17 +29,17 @@ _xray_auto_select_reality_sni() {
         dom="$(printf '%s' "$dom" | tr -d '\r' | xargs)"
         [[ -z "$dom" || "$dom" == \#* ]] && continue
 
-        # Замеряем успешность TLS 1.3 + H2 и время установления TLS-соединения
+        # Замеряем успешность TLS 1.3 + H2 и время установления TLS-соединения по IPv4
         local res code t_connect
-        res="$(curl -sS -o /dev/null --tlsv1.3 --http2 --max-time 3 -w "%{http_code} %{time_connect}" "https://${dom}/" 2>/dev/null || echo "000 99")"
+        res="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code} %{time_connect}" "https://${dom}/" 2>/dev/null || echo "000 99")"
         code="${res%% *}"
         t_connect="${res##* }"
 
         if [[ "$code" != "000" ]]; then
             local ms
-            ms="$(awk -v t="$t_connect" 'BEGIN {printf "%d", t * 1000}')"
+            ms="$(LC_ALL=C awk -v t="$t_connect" 'BEGIN {printf "%d", t * 1000}')"
             echo -e "  [${GREEN}OK${NC}] ${dom} (HTTP ${code}, TLS ${ms} ms)"
-            if [[ "$ms" -lt "$best_time" ]]; then
+            if [[ "$ms" =~ ^[0-9]+$ ]] && [[ "$ms" -lt "$best_time" ]]; then
                 best_time="$ms"
                 best_sni="$dom"
             fi

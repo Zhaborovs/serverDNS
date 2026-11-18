@@ -6,7 +6,6 @@
 # ==============================================================================
 
 user daemon
-pidfile /var/run/sniproxy.pid
 
 error_log {
     syslog daemon
@@ -30,7 +29,7 @@ ${DNS_DOMAIN_RULES}
 
     # 2. Собственные домены сервера (заглушка, 3x-ui, CDN origin, Drag&Drop) -> Nginx
     ^${BASE_DOMAIN_REGEX}$ 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT}
-    ^.*\.${BASE_DOMAIN_REGEX}$ 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT}
+    .*\.${BASE_DOMAIN_REGEX}$ 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT}
 
     # 3. Домены белых списков (маскировка VLESS-Reality) -> Xray Reality
 ${WHITELIST_SNI_RULES}

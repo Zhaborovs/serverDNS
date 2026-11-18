@@ -28,3 +28,9 @@ wildberries.ru
 gosuslugi.ru
 sberbank.ru
 tbank.ru
+
+# --- Универсальные международные CDN / TLS 1.3 + H2 (работают из США, DE и NL) ---
+dl.google.com
+www.microsoft.com
+addons.mozilla.org
+www.apple.com

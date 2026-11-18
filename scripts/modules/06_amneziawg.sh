@@ -21,23 +21,24 @@ AWG_REGISTRY="${STATE_DIR}/awg/registry.json"
 _awg_install_binaries() {
     export DEBIAN_FRONTEND=noninteractive
 
-    if command -v awg &>/dev/null && command -v amneziawg-go &>/dev/null; then
+    if command -v awg &>/dev/null && (modprobe amneziawg 2>/dev/null || command -v amneziawg-go &>/dev/null); then
         log_ok "Бинарники AmneziaWG уже установлены."
         return 0
     fi
 
-    apt-get install -y wireguard-tools resolvconf >/dev/null 2>&1 || apt-get install -y wireguard-tools >/dev/null 2>&1 || true
+    apt-get install -y wireguard-tools software-properties-common python3-launchpadlib gnupg2 >/dev/null 2>&1 || true
+    apt-get install -y "linux-headers-$(uname -r)" >/dev/null 2>&1 || true
 
-    # 1. Пробуем поставить нативный пакет amneziawg из официального PPA (быстрее ядерный модуль)
+    # 1. Ставим нативный пакет amneziawg из официального PPA (amneziawg-dkms + amneziawg-tools)
     if ! command -v awg &>/dev/null; then
-        log_info "Подключение PPA amnezia/ppa для установки amneziawg-tools и модуля..."
+        log_info "Подключение PPA amnezia/ppa для установки amneziawg и amneziawg-tools..."
         add-apt-repository -y ppa:amnezia/ppa >/dev/null 2>&1 || true
         apt-get update -y >/dev/null 2>&1 || true
-        apt-get install -y amneziawg amneziawg-tools >/dev/null 2>&1 || apt-get install -y amneziawg-tools >/dev/null 2>&1 || true
+        apt-get install -y amneziawg >/dev/null 2>&1 || apt-get install -y amneziawg-tools >/dev/null 2>&1 || true
     fi
 
-    # 2. Всегда держим актуальный userspace amneziawg-go как надежный fallback для LXC/VPS без kernel headers
-    if ! command -v amneziawg-go &>/dev/null; then
+    # 2. Если ядерный модуль не загрузился — обеспечиваем userspace amneziawg-go (релиз или сборка из исходников)
+    if ! modprobe amneziawg 2>/dev/null && ! command -v amneziawg-go &>/dev/null; then
         local arch tag dl_url
         case "$(uname -m)" in
             x86_64|amd64) arch="amd64" ;;
@@ -45,7 +46,7 @@ _awg_install_binaries() {
             *) arch="amd64" ;;
         esac
         tag="$(fetch_latest_github_release "amnezia-vpn/amneziawg-go" "latest")"
-        log_info "Проверка/загрузка amneziawg-go (${tag}, ${arch})..."
+        log_info "Загрузка или сборка amneziawg-go (${tag}, ${arch})..."
         dl_url="$(curl -fsSL --max-time 10 "https://api.github.com/repos/amnezia-vpn/amneziawg-go/releases/latest" 2>/dev/null \
             | jq -r --arg arch "$arch" '.assets[]?.browser_download_url | select(contains("linux") and contains($arch))' | head -n1 || true)"
         if [[ -n "$dl_url" ]]; then
@@ -60,6 +61,21 @@ _awg_install_binaries() {
                 log_ok "Userspace amneziawg-go установлен в /usr/local/bin/amneziawg-go."
             fi
             rm -rf "$tmp_dir"
+        fi
+
+        if ! command -v amneziawg-go &>/dev/null; then
+            log_info "Сборка amneziawg-go из исходников (golang-go)..."
+            apt-get install -y golang-go build-essential >/dev/null 2>&1 || true
+            if command -v go &>/dev/null; then
+                local src_dir="/tmp/amneziawg-go-src"
+                rm -rf "$src_dir"
+                git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-go.git "$src_dir" >/dev/null 2>&1 || true
+                if [[ -d "$src_dir" ]] && make -C "$src_dir" >/dev/null 2>&1; then
+                    install -m 0755 "${src_dir}/amneziawg-go" /usr/local/bin/amneziawg-go
+                    log_ok "Userspace amneziawg-go собран и установлен в /usr/local/bin/amneziawg-go."
+                fi
+                rm -rf "$src_dir"
+            fi
         fi
     fi
 }
@@ -80,7 +96,15 @@ EOF
             systemctl daemon-reload
         fi
         awg-quick down "$iface" >/dev/null 2>&1 || true
-        awg-quick up "$iface"
+        if ! awg-quick up "$iface" 2>/dev/null; then
+            log_warn "Установленный пакет awg не принял расширенные параметры S3/S4 — переключаю на совместимый режим S1/S2..."
+            python3 "${PROJECT_ROOT}/scripts/py_helpers/awg_config_gen.py" set-legacy-s12 \
+                --registry "$AWG_REGISTRY" \
+                --server-conf "$conf_file" \
+                --clients-dir "${STATE_DIR}/clients"
+            awg-quick down "$iface" >/dev/null 2>&1 || true
+            awg-quick up "$iface"
+        fi
         systemctl enable "awg-quick@${iface}" >/dev/null 2>&1 || true
         log_ok "Интерфейс AmneziaWG (${iface}) поднят через awg-quick."
     elif command -v wg-quick &>/dev/null; then
