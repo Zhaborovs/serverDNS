@@ -71,7 +71,7 @@ _prepare_cat_videos() {
             -exec cp -u {} "$cats_dir/" \; 2>/dev/null || true
     fi
 
-    # 2. Загрузка недостающих анимаций до 12 штук через TheCatAPI + проверенный резервный список (через curl -4)
+    # 2. Загрузка настоящих .webm видеороликов котиков с Wikimedia Commons (через curl -4)
     python3 - "$cats_dir" "12" <<'PYEOF'
 import hashlib, json, subprocess, sys
 from pathlib import Path
@@ -79,46 +79,67 @@ from pathlib import Path
 cats_dir = Path(sys.argv[1])
 target_count = int(sys.argv[2])
 exts = {".mp4", ".webm", ".gif"}
-ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+ua = "NetPulseBot/1.0 (https://github.com/Zhaborovs/serverDNS)"
 
+# 14 проверенных коротких 240p VP9 .webm видеороликов с котиками (200 КБ - 1.7 МБ)
 FALLBACK_URLS = [
-    "https://cdn2.thecatapi.com/images/4ih.gif",
-    "https://cdn2.thecatapi.com/images/812.gif",
-    "https://cdn2.thecatapi.com/images/cul.gif",
-    "https://cdn2.thecatapi.com/images/891.gif",
-    "https://cdn2.thecatapi.com/images/2q1.gif",
-    "https://cdn2.thecatapi.com/images/5ei.gif",
-    "https://cdn2.thecatapi.com/images/MTczOTM3NQ.gif",
-    "https://cdn2.thecatapi.com/images/4h5.gif",
-    "https://cdn2.thecatapi.com/images/49f.gif",
-    "https://cdn2.thecatapi.com/images/48p.gif",
-    "https://cdn2.thecatapi.com/images/b7r.gif",
-    "https://cdn2.thecatapi.com/images/7t7.gif",
-    "https://cdn2.thecatapi.com/images/MTkzMTU5Nw.gif",
-    "https://cdn2.thecatapi.com/images/be4.gif",
-    "https://cdn2.thecatapi.com/images/1a6.gif",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d2/Calico_kitten_playing.webm/Calico_kitten_playing.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/7/74/Cat_discovers_it_was_being_spied_on.webm/Cat_discovers_it_was_being_spied_on.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/f/f9/Cat_Plays.webm/Cat_Plays.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/cc/Cat_opening_door.webm/Cat_opening_door.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/0/0d/Cat_Play_02.webm/Cat_Play_02.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/6/6d/Housecat_Grooming_Itself.webm/Housecat_Grooming_Itself.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/e/e0/Black_Cat_walking.webm/Black_Cat_walking.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/8a/Cat_in_a_Bag.webm/Cat_in_a_Bag.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/6/60/Catblinking-tokyo-area-2018-4-9.webm/Catblinking-tokyo-area-2018-4-9.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/f/ff/Cat_play_02.webm/Cat_play_02.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/8/8f/Gatos_hmnos.webm/Gatos_hmnos.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/d/d8/Cat_interacting_with_catnip_%28nepeta%29.webm/Cat_interacting_with_catnip_%28nepeta%29.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/3/32/2022-10-18_LJUBLJANA_Doma_CARNIVORA_Felis_catus_DOMA%C4%8CA_MA%C4%8CKA_4.webm/2022-10-18_LJUBLJANA_Doma_CARNIVORA_Felis_catus_DOMA%C4%8CA_MA%C4%8CKA_4.webm.240p.vp9.webm",
+    "https://upload.wikimedia.org/wikipedia/commons/transcoded/6/62/Chat_domestique_%28Felis_silvestris_catus%29.ogv/Chat_domestique_%28Felis_silvestris_catus%29.ogv.240p.vp9.webm",
 ]
+
+
+def is_valid_media(data: bytes) -> bool:
+    if not (15000 < len(data) <= 5 * 1024 * 1024):
+        return False
+    return data[:4] == b"\x1a\x45\xdf\xa3" or data[4:8] == b"ftyp" or data[:4] == b"GIF8"
+
 
 existing = [p for p in cats_dir.iterdir() if p.is_file() and p.suffix.lower() in exts and p.stat().st_size > 15000]
 seen_hashes = {hashlib.md5(p.read_bytes()).hexdigest() for p in existing}
 
 if len(existing) < target_count:
-    print(f"[INFO] Загрузка пака анимаций котиков (текущих: {len(existing)}, цель: {target_count})...")
+    print(f"[INFO] Загрузка пака .webm видео-котиков (текущих: {len(existing)}, цель: {target_count})...")
     candidate_urls: list[str] = []
-    for _ in range(2):
-        res = subprocess.run(
-            ["curl", "-4", "-fsSL", "--connect-timeout", "4", "--max-time", "8", "-A", ua,
-             "https://api.thecatapi.com/v1/images/search?mime_types=gif&limit=10"],
-            capture_output=True, text=True, check=False,
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            try:
-                for item in json.loads(res.stdout):
-                    u = item.get("url")
-                    if u and u not in candidate_urls:
-                        candidate_urls.append(u)
-            except Exception:
-                pass
+    api_url = (
+        "https://commons.wikimedia.org/w/api.php?action=query&generator=categorymembers"
+        "&gcmtitle=Category:Videos_of_cats&gcmtype=file&gcmlimit=40&prop=videoinfo"
+        "&viprop=derivatives&format=json"
+    )
+    res = subprocess.run(
+        ["curl", "-4", "-fsSL", "--connect-timeout", "4", "--max-time", "8", "-A", ua, api_url],
+        capture_output=True, text=True, check=False,
+    )
+    if res.returncode == 0 and res.stdout.strip():
+        try:
+            pages = json.loads(res.stdout).get("query", {}).get("pages", {}).values()
+            bad_words = ("birth", "dead", "injury", "surgery", "sick", "prey", "mouse", "rat", "parasite")
+            for p in pages:
+                title = p.get("title", "").lower()
+                if any(w in title for w in bad_words):
+                    continue
+                vi = (p.get("videoinfo") or [{}])[0]
+                dur = float(vi.get("duration") or 0)
+                if not (3.0 <= dur <= 35.0):
+                    continue
+                for d in vi.get("derivatives") or []:
+                    src = d.get("src", "")
+                    if src.endswith(".240p.vp9.webm") and src not in candidate_urls:
+                        candidate_urls.append(src)
+                        break
+        except Exception:
+            pass
 
     for u in FALLBACK_URLS:
         if u not in candidate_urls:
@@ -129,19 +150,20 @@ if len(existing) < target_count:
     for url in candidate_urls:
         if len(existing) >= target_count:
             break
-        while (cats_dir / f"cat_{idx:02d}.gif").exists():
+        while (cats_dir / f"cat_{idx:02d}.webm").exists():
             idx += 1
         tmp_file.unlink(missing_ok=True)
         dl = subprocess.run(
-            ["curl", "-4", "-fsSL", "--connect-timeout", "4", "--max-time", "15", "-A", ua, url, "-o", str(tmp_file)],
+            ["curl", "-4", "-fsSL", "--connect-timeout", "5", "--max-time", "15", "-A", ua, url, "-o", str(tmp_file)],
             capture_output=True, check=False,
         )
         if dl.returncode == 0 and tmp_file.exists():
             data = tmp_file.read_bytes()
-            if 15000 < len(data) <= 5 * 1024 * 1024 and data[:4] == b"GIF8":
+            if is_valid_media(data):
                 h = hashlib.md5(data).hexdigest()
                 if h not in seen_hashes:
-                    out_file = cats_dir / f"cat_{idx:02d}.gif"
+                    ext = ".gif" if data[:4] == b"GIF8" else ".mp4" if data[4:8] == b"ftyp" else ".webm"
+                    out_file = cats_dir / f"cat_{idx:02d}{ext}"
                     tmp_file.replace(out_file)
                     existing.append(out_file)
                     seen_hashes.add(h)
