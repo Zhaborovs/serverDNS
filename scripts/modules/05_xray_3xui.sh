@@ -17,13 +17,12 @@
 #   /etc/x-ui/x-ui.db, ключи Reality в /etc/server-combain/state.env
 # ==============================================================================
 
-_xray_auto_select_reality_sni() {
+_xray_find_best_sni() {
+    local verbose="${1:-false}"
     local wl_file="${PROJECT_ROOT}/config/presets/whitelist_sni.list"
+    _FOUND_BEST_SNI=""
+    _FOUND_BEST_MS="99999"
     [[ ! -f "$wl_file" ]] && return 0
-
-    log_info "Авто-проверка доменов из белого списка для VLESS-Reality (TLS 1.3 + HTTP/2)..."
-    local best_sni=""
-    local best_time="99999"
 
     while IFS= read -r dom; do
         dom="$(printf '%s' "$dom" | tr -d '\r' | xargs)"
@@ -38,23 +37,79 @@ _xray_auto_select_reality_sni() {
         if [[ "$code" != "000" ]]; then
             local ms
             ms="$(LC_ALL=C awk -v t="$t_connect" 'BEGIN {printf "%d", t * 1000}')"
-            echo -e "  [${GREEN}OK${NC}] ${dom} (HTTP ${code}, TLS ${ms} ms)"
-            if [[ "$ms" =~ ^[0-9]+$ ]] && [[ "$ms" -lt "$best_time" ]]; then
-                best_time="$ms"
-                best_sni="$dom"
+            [[ "$verbose" == "true" ]] && echo -e "  [${GREEN}OK${NC}] ${dom} (HTTP ${code}, TLS ${ms} ms)"
+            if [[ "$ms" =~ ^[0-9]+$ ]] && [[ "$ms" -lt "$_FOUND_BEST_MS" ]]; then
+                _FOUND_BEST_MS="$ms"
+                _FOUND_BEST_SNI="$dom"
             fi
         else
-            echo -e "  [${YELLOW}SKIP${NC}] ${dom} (нет ответа TLS 1.3 / таймаут)"
+            [[ "$verbose" == "true" ]] && echo -e "  [${YELLOW}SKIP${NC}] ${dom} (нет ответа TLS 1.3 / таймаут)"
         fi
     done < "$wl_file"
+}
 
-    if [[ -n "$best_sni" ]]; then
-        log_ok "Рекомендованный быстрый SNI для Reality: ${best_sni} (${best_time} ms)"
-        read -rp "Использовать '${best_sni}' или ввести свой SNI? [Enter = ${best_sni}]: " custom_sni
-        state_set "REALITY_SNI" "${custom_sni:-$best_sni}"
+_xray_auto_select_reality_sni() {
+    log_info "Авто-проверка доменов из белого списка для VLESS-Reality (TLS 1.3 + HTTP/2)..."
+    _xray_find_best_sni "true"
+
+    if [[ -n "$_FOUND_BEST_SNI" ]]; then
+        log_ok "Рекомендованный быстрый SNI для Reality: ${_FOUND_BEST_SNI} (${_FOUND_BEST_MS} ms)"
+        read -rp "Использовать '${_FOUND_BEST_SNI}' или ввести свой SNI? [Enter = ${_FOUND_BEST_SNI}]: " custom_sni
+        state_set "REALITY_SNI" "${custom_sni:-$_FOUND_BEST_SNI}"
     else
-        log_warn "Авто-чекер не нашел доступный домен, оставлен SNI по умолчанию: ${REALITY_SNI:-sun9-73.userapi.com}"
+        log_warn "Авто-чекер не нашел доступный домен, оставлен SNI по умолчанию: ${REALITY_SNI:-www.microsoft.com}"
     fi
+}
+
+_xray_heal_reality_sni_if_needed() {
+    state_load_silent
+    local cur_sni="${REALITY_SNI:-}"
+    local code="000"
+    if [[ -n "$cur_sni" ]]; then
+        code="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code}" "https://${cur_sni}/" 2>/dev/null || echo "000")"
+    fi
+
+    if [[ -n "$code" && "$code" != "000" ]]; then
+        return 0
+    fi
+
+    log_warn "Текущий Reality SNI '${cur_sni:-не задан}' недоступен с этого сервера (код ${code}). Подбираю рабочий SNI..."
+    _xray_find_best_sni "false"
+    if [[ -n "$_FOUND_BEST_SNI" ]]; then
+        state_set "REALITY_SNI" "$_FOUND_BEST_SNI"
+        log_ok "Reality SNI автоматически обновлен на рабочий: ${_FOUND_BEST_SNI} (${_FOUND_BEST_MS} ms)"
+    else
+        log_warn "Рабочий SNI из whitelist_sni.list не найден, оставлен '${cur_sni}'."
+    fi
+}
+
+mod_xray_update_subscription() {
+    state_load_silent
+    if [[ -z "${MAIN_CLIENT_UUID:-}" || -z "${REALITY_PUBLIC_KEY:-}" ]]; then
+        return 0
+    fi
+    [[ -z "${SUB_TOKEN:-}" ]] && state_set "SUB_TOKEN" "$(gen_random_str 20)"
+
+    local cur_ip="${SERVER_IP:-$(detect_server_ip)}"
+    local sub_file="${STATE_DIR}/nginx/conf.d/sub_payload.b64"
+    local extra_file="${STATE_DIR}/extra_sub_links.list"
+    mkdir -p "${STATE_DIR}/nginx/conf.d"
+
+    python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" export-sub \
+        --server-ip "$cur_ip" \
+        --base-domain "${BASE_DOMAIN:-}" \
+        --uuid "${MAIN_CLIENT_UUID}" \
+        --reality-sni "${REALITY_SNI:-www.microsoft.com}" \
+        --reality-public-key "${REALITY_PUBLIC_KEY}" \
+        --reality-short-id "${REALITY_SHORT_ID:-00}" \
+        --vk-cdn-domain "${VK_CDN_DOMAIN:-}" \
+        --vk-xhttp-path "${XHTTP_VK_PATH:-}" \
+        --vk-ws-path "${WS_VK_PATH:-}" \
+        --ya-cdn-domain "${YA_CDN_DOMAIN:-}" \
+        --ya-xhttp-path "${XHTTP_YA_PATH:-}" \
+        --ya-ws-path "${WS_YA_PATH:-}" \
+        --extra-links-file "$extra_file" \
+        --out "$sub_file"
 }
 
 _xray_ensure_keys() {
@@ -73,6 +128,7 @@ _xray_ensure_keys() {
 }
 
 mod_xray_apply_inbounds() {
+    _xray_heal_reality_sni_if_needed
     state_load_silent
     if [[ -z "${MAIN_CLIENT_UUID:-}" || -z "${REALITY_PRIVATE_KEY:-}" || -z "${REALITY_PUBLIC_KEY:-}" ]]; then
         log_err "Не найдены ключи Reality/UUID в state.env. Сначала запустите mod_xray_3xui_setup."
@@ -102,6 +158,11 @@ mod_xray_apply_inbounds() {
         --ya-ws-path "${WS_YA_PATH}"
 
     docker start combain-3xui >/dev/null
+
+    if declare -f mod_sniproxy_sync_domains >/dev/null 2>&1; then
+        mod_sniproxy_sync_domains
+    fi
+    mod_xray_update_subscription
 }
 
 mod_xray_3xui_setup() {
@@ -142,13 +203,10 @@ mod_xray_3xui_setup() {
 
     mod_xray_apply_inbounds
 
-    # Обновляем nginx (скрытый путь панели) и sniproxy (выбранный REALITY_SNI)
+    # Обновляем nginx (скрытый путь панели + подписка + отдельный vhost AdGuard)
     if declare -f _render_nginx_conf >/dev/null 2>&1; then
         _render_nginx_conf
         docker restart combain-nginx >/dev/null 2>&1 || true
-    fi
-    if declare -f mod_sniproxy_sync_domains >/dev/null 2>&1; then
-        mod_sniproxy_sync_domains
     fi
 
     log_ok "Модуль 05 завершен: 3x-ui скрыта за /${SECRET_PANEL_PATH}/, инбаунды Reality и VK/Yandex CDN активны."
@@ -189,5 +247,59 @@ mod_xray_configure_cdn_domains() {
         _render_nginx_conf
         docker restart combain-nginx >/dev/null 2>&1 || true
     fi
-    log_ok "CDN-домены обновлены. Ссылки vless:// доступны через 'combain info'."
+    mod_xray_update_subscription
+    log_ok "CDN-домены и единая подписка обновлены. Ссылки доступны через 'combain info'."
+}
+
+mod_xray_manage_extra_sub_nodes() {
+    state_load_silent
+    [[ -z "${SUB_TOKEN:-}" ]] && state_set "SUB_TOKEN" "$(gen_random_str 20)"
+    local extra_file="${STATE_DIR}/extra_sub_links.list"
+    touch "$extra_file"
+
+    while true; do
+        echo ""
+        echo -e "${BOLD}--- Единая подписка (Happ / v2rayNG / Hiddify) ---${NC}"
+        echo -e "URL подписки: ${GREEN}https://${BASE_DOMAIN:-?}/sub/${SUB_TOKEN}${NC}"
+        echo "Файл внешних нод: ${extra_file}"
+        echo ""
+        echo " 1) Добавить ссылку (vless:// / vmess:// / trojan:// / ss://) от другой ноды"
+        echo " 2) Показать список добавленных внешних нод"
+        echo " 3) Очистить все внешние ноды (оставить только текущий сервер)"
+        echo " 0) Назад"
+        read -rp "Выберите действие [0-3]: " sub_choice
+        case "$sub_choice" in
+            1)
+                local ext_uri
+                read -rp "Вставьте URI-ссылку внешнего сервера: " ext_uri
+                ext_uri="$(printf '%s' "$ext_uri" | tr -d '\r' | xargs)"
+                if [[ -n "$ext_uri" ]]; then
+                    echo "$ext_uri" >> "$extra_file"
+                    mod_xray_update_subscription
+                    log_ok "Внешняя нода добавлена и подписка пересобрана."
+                else
+                    log_warn "Пустая ссылка пропущена."
+                fi
+                ;;
+            2)
+                echo ""
+                if [[ -s "$extra_file" ]]; then
+                    nl -ba "$extra_file"
+                else
+                    echo "Внешние ноды пока не добавлены (в подписке только адреса этого сервера)."
+                fi
+                ;;
+            3)
+                : > "$extra_file"
+                mod_xray_update_subscription
+                log_ok "Список внешних нод очищен, подписка пересобрана."
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                log_warn "Неверный выбор."
+                ;;
+        esac
+    done
 }

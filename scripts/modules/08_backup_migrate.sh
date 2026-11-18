@@ -54,9 +54,12 @@ mod_backup_quick_change_ip() {
             --new-ip "$new_ip"
     fi
 
-    # 3. Перезапуск sniproxy и проверка DNS A-записей
+    # 3. Перезапуск sniproxy, пересборка подписки и проверка DNS A-записей
     killall sniproxy 2>/dev/null || true
     systemctl restart sniproxy >/dev/null 2>&1 || true
+    if declare -f mod_xray_update_subscription >/dev/null 2>&1; then
+        mod_xray_update_subscription
+    fi
 
     echo ""
     log_warn "Не забудьте обновить A-записи у регистратора (REG.RU) на новый IP: ${new_ip}"

@@ -34,8 +34,43 @@ _render_nginx_conf() {
     local dst="${nginx_dir}/conf.d/default.conf"
     mkdir -p "${nginx_dir}/conf.d" "${nginx_dir}/decoy/chunks"
 
-    local vars='${BASE_DOMAIN} ${DNS_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN} ${NGINX_INTERNAL_HTTPS_PORT} ${AGH_INTERNAL_HTTPS_PORT} ${SECRET_PANEL_PATH} ${XUI_INTERNAL_PORT} ${XHTTP_VK_PATH} ${XRAY_VK_XHTTP_PORT} ${WS_VK_PATH} ${XRAY_VK_WS_PORT} ${XHTTP_YA_PATH} ${XRAY_YA_XHTTP_PORT} ${WS_YA_PATH} ${XRAY_YA_WS_PORT} ${BACKUP_DROP_PATH} ${BACKUP_DROP_INTERNAL_PORT}'
+    [[ -z "${SUB_TOKEN:-}" ]] && state_set "SUB_TOKEN" "$(gen_random_str 20)"
+    SUB_TITLE_B64="$(printf 'Combain %s' "${BASE_DOMAIN:-VPN}" | base64 | tr -d '\r\n')"
+    export SUB_TITLE_B64
+    [[ -f "${nginx_dir}/conf.d/sub_payload.b64" ]] || printf '' > "${nginx_dir}/conf.d/sub_payload.b64"
+
+    local vars='${BASE_DOMAIN} ${DNS_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN} ${NGINX_INTERNAL_HTTPS_PORT} ${AGH_INTERNAL_HTTPS_PORT} ${SECRET_PANEL_PATH} ${XUI_INTERNAL_PORT} ${XHTTP_VK_PATH} ${XRAY_VK_XHTTP_PORT} ${WS_VK_PATH} ${XRAY_VK_WS_PORT} ${XHTTP_YA_PATH} ${XRAY_YA_XHTTP_PORT} ${WS_YA_PATH} ${XRAY_YA_WS_PORT} ${BACKUP_DROP_PATH} ${BACKUP_DROP_INTERNAL_PORT} ${SUB_TOKEN} ${SUB_TITLE_B64}'
     envsubst "$vars" < "$tpl" > "$dst"
+
+    if [[ -n "${DNS_DOMAIN:-}" && "${DNS_DOMAIN}" != "${BASE_DOMAIN:-}" ]]; then
+        cat > "${nginx_dir}/conf.d/dns_agh.conf" <<EOF
+server {
+    listen 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT} ssl;
+    http2 on;
+    server_name ${DNS_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${BASE_DOMAIN}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass https://127.0.0.1:${AGH_INTERNAL_HTTPS_PORT};
+        proxy_ssl_verify off;
+        proxy_ssl_server_name on;
+        proxy_ssl_name ${DNS_DOMAIN};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+EOF
+    else
+        rm -f "${nginx_dir}/conf.d/dns_agh.conf"
+    fi
+
     log_ok "Конфигурация Nginx отрендерена: ${dst}"
 }
 

@@ -417,9 +417,17 @@ def build_vless_uri(
     return f"vless://{client_uuid}@{address}:{port}?{qs}#{frag}"
 
 
-def cmd_export_links(args: argparse.Namespace) -> int:
-    links: list[tuple[str, str]] = []
-    links.append(
+def _collect_vless_links(
+    args: argparse.Namespace,
+    append_domain_label: bool = False,
+) -> list[tuple[str, str]]:
+    """Формирует список (описание, vless:// URI) для локальной и CDN-подписок."""
+    def _tag(base_name: str) -> str:
+        if append_domain_label and args.base_domain:
+            return f"{base_name} [{args.base_domain}]"
+        return base_name
+
+    links: list[tuple[str, str]] = [
         (
             "VLESS-Reality (прямой с маскировкой)",
             build_vless_uri(
@@ -427,6 +435,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                 args.server_ip,
                 443,
                 {
+                    "encryption": "none",
                     "type": "tcp",
                     "security": "reality",
                     "pbk": args.reality_public_key,
@@ -436,24 +445,30 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                     "spx": "/",
                     "flow": "xtls-rprx-vision",
                 },
-                "Combain-Reality",
+                _tag("Combain-Reality"),
             ),
         )
-    )
+    ]
+
     if args.base_domain:
         if args.ya_xhttp_path:
             direct_params = {
+                "encryption": "none",
                 "type": "xhttp",
                 "security": "tls",
                 "sni": args.base_domain,
+                "host": args.base_domain,
                 "fp": "chrome",
                 "path": f"/{args.ya_xhttp_path.lstrip('/')}",
+                "mode": "auto",
             }
         else:
             direct_params = {
+                "encryption": "none",
                 "type": "xhttp",
                 "security": "tls",
                 "sni": args.base_domain,
+                "host": args.base_domain,
                 "fp": "chrome",
                 "path": f"/{args.vk_xhttp_path.lstrip('/')}",
                 "mode": "packet-up",
@@ -467,10 +482,11 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                     args.base_domain,
                     443,
                     direct_params,
-                    "Combain-Direct-XHTTP",
+                    _tag("Combain-Direct-XHTTP"),
                 ),
             )
         )
+
     if args.vk_cdn_domain:
         links.append(
             (
@@ -480,6 +496,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                     args.vk_cdn_domain,
                     443,
                     {
+                        "encryption": "none",
                         "type": "xhttp",
                         "security": "tls",
                         "sni": args.vk_cdn_domain,
@@ -489,10 +506,11 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                         "mode": "packet-up",
                         "extra": json.dumps(VK_GET_XHTTP_EXTRA, separators=(",", ":")),
                     },
-                    "VK-CDN-XHTTP",
+                    _tag("VK-CDN-XHTTP"),
                 ),
             )
         )
+
     if args.ya_cdn_domain:
         links.append(
             (
@@ -502,6 +520,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                     args.ya_cdn_domain,
                     443,
                     {
+                        "encryption": "none",
                         "type": "xhttp",
                         "security": "tls",
                         "sni": args.ya_cdn_domain,
@@ -509,7 +528,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                         "fp": "chrome",
                         "path": f"/{args.ya_xhttp_path.lstrip('/')}",
                     },
-                    "Yandex-CDN-XHTTP",
+                    _tag("Yandex-CDN-XHTTP"),
                 ),
             )
         )
@@ -521,6 +540,7 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                     args.ya_cdn_domain,
                     443,
                     {
+                        "encryption": "none",
                         "type": "ws",
                         "security": "tls",
                         "sni": args.ya_cdn_domain,
@@ -528,14 +548,48 @@ def cmd_export_links(args: argparse.Namespace) -> int:
                         "fp": "chrome",
                         "path": f"/{args.ya_ws_path.lstrip('/')}",
                     },
-                    "Yandex-CDN-WS",
+                    _tag("Yandex-CDN-WS"),
                 ),
             )
         )
 
-    for label, uri in links:
+    return links
+
+
+def cmd_export_links(args: argparse.Namespace) -> int:
+    for label, uri in _collect_vless_links(args, append_domain_label=False):
         print(f"{label}: {uri}")
     return 0
+
+
+def cmd_export_sub(args: argparse.Namespace) -> int:
+    """Генерирует Base64-полезную нагрузку единой подписки (с внешними нодами при наличии)."""
+    uris = [uri for _, uri in _collect_vless_links(args, append_domain_label=True)]
+    if args.extra_links_file and args.extra_links_file.is_file():
+        for raw_line in args.extra_links_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line and not line.startswith("#"):
+                uris.append(line)
+
+    payload_b64 = base64.b64encode("\n".join(uris).encode("utf-8")).decode("ascii")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(payload_b64, encoding="utf-8")
+    return 0
+
+
+def _add_common_link_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--server-ip", required=True)
+    parser.add_argument("--base-domain", default="")
+    parser.add_argument("--uuid", required=True)
+    parser.add_argument("--reality-sni", required=True)
+    parser.add_argument("--reality-public-key", required=True)
+    parser.add_argument("--reality-short-id", required=True)
+    parser.add_argument("--vk-cdn-domain", default="")
+    parser.add_argument("--vk-xhttp-path", default="")
+    parser.add_argument("--vk-ws-path", default="")
+    parser.add_argument("--ya-cdn-domain", default="")
+    parser.add_argument("--ya-xhttp-path", default="")
+    parser.add_argument("--ya-ws-path", default="")
 
 
 def main() -> int:
@@ -564,24 +618,19 @@ def main() -> int:
     p_init.add_argument("--ya-ws-path", required=True)
 
     p_links = subparsers.add_parser("export-links", help="Сформировать vless:// ссылки")
-    p_links.add_argument("--server-ip", required=True)
-    p_links.add_argument("--base-domain", default="")
-    p_links.add_argument("--uuid", required=True)
-    p_links.add_argument("--reality-sni", required=True)
-    p_links.add_argument("--reality-public-key", required=True)
-    p_links.add_argument("--reality-short-id", required=True)
-    p_links.add_argument("--vk-cdn-domain", default="")
-    p_links.add_argument("--vk-xhttp-path", default="")
-    p_links.add_argument("--vk-ws-path", default="")
-    p_links.add_argument("--ya-cdn-domain", default="")
-    p_links.add_argument("--ya-xhttp-path", default="")
-    p_links.add_argument("--ya-ws-path", default="")
+    _add_common_link_args(p_links)
+
+    p_sub = subparsers.add_parser("export-sub", help="Сформировать Base64 файл подписки")
+    _add_common_link_args(p_sub)
+    p_sub.add_argument("--extra-links-file", type=Path, default=None)
+    p_sub.add_argument("--out", type=Path, required=True)
 
     args = parser.parse_args()
     handlers = {
         "gen-keys": cmd_gen_keys,
         "init-all": cmd_init_all,
         "export-links": cmd_export_links,
+        "export-sub": cmd_export_sub,
     }
     return handlers[args.command](args)
 

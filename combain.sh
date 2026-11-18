@@ -113,9 +113,10 @@ menu_vpn_management() {
     echo " 3) Пересоздать ключи / порты Telegram Proxy (MTProto + SOCKS5)"
     echo " 4) Обновить файлы сайта-заглушки и загрузить пак видео-котиков"
     echo " 5) Показать инструкцию по настройке VK/Yandex CDN"
-    echo " 6) Показать QR-коды подключений (VLESS / CDN / AWG / TG)"
+    echo " 6) Показать QR-коды подключений (Подписка / VLESS / AWG / TG)"
+    echo " 7) Единая подписка: управление внешними нодами (2-3 сервера)"
     echo " 0) Назад"
-    read -rp "Выберите действие [0-6]: " vpn_choice
+    read -rp "Выберите действие [0-7]: " vpn_choice
     case "$vpn_choice" in
         1) mod_xray_configure_cdn_domains ;;
         2) mod_amneziawg_add_client ;;
@@ -123,6 +124,7 @@ menu_vpn_management() {
         4) mod_ssl_nginx_update_decoy ;;
         5) less "${PROJECT_ROOT}/docs/cdn_whitelist_guide.md" || cat "${PROJECT_ROOT}/docs/cdn_whitelist_guide.md" ;;
         6) mod_dashboard_qr_menu ;;
+        7) mod_xray_manage_extra_sub_nodes ;;
         0) return 0 ;;
         *) log_warn "Неверный выбор." ;;
     esac

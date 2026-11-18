@@ -104,6 +104,7 @@ state_init_interactive() {
     [[ -z "${XHTTP_YA_PATH:-}" ]]       && state_set "XHTTP_YA_PATH" "api-ya-$(gen_random_str 8)"
     [[ -z "${WS_YA_PATH:-}" ]]          && state_set "WS_YA_PATH" "ws-ya-$(gen_random_str 8)"
     [[ -z "${BACKUP_DROP_PATH:-}" ]]    && state_set "BACKUP_DROP_PATH" "drop-$(gen_random_str 14)"
+    [[ -z "${SUB_TOKEN:-}" ]]           && state_set "SUB_TOKEN" "$(gen_random_str 20)"
 
     [[ -z "${PANEL_USER:-}" ]]          && state_set "PANEL_USER" "admin_$(gen_random_str 4)"
     [[ -z "${PANEL_PASS:-}" ]]          && state_set "PANEL_PASS" "$(gen_random_str 18)"

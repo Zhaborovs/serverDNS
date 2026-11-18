@@ -43,11 +43,19 @@ _qr_show_payload() {
 
 mod_dashboard_show_info() {
     state_load_silent
+    if [[ -n "${BASE_DOMAIN:-}" && -n "${MAIN_CLIENT_UUID:-}" ]] && declare -f mod_xray_update_subscription >/dev/null 2>&1; then
+        mod_xray_update_subscription >/dev/null 2>&1 || true
+        state_load_silent
+    fi
     local summary_file="${STATE_DIR}/last_summary.txt"
 
     local cur_ip="${SERVER_IP:-$(detect_server_ip)}"
     local base_dom="${BASE_DOMAIN:-НЕ_ЗАДАН}"
     local dns_dom="${DNS_DOMAIN:-$base_dom}"
+    local sub_url="не задана"
+    if [[ "$base_dom" != "НЕ_ЗАДАН" && -n "${SUB_TOKEN:-}" ]]; then
+        sub_url="https://${base_dom}/sub/${SUB_TOKEN}"
+    fi
 
     local xray_links=""
     xray_links="$(_dashboard_export_xray_links "$cur_ip")"
@@ -87,6 +95,7 @@ mod_dashboard_show_info() {
         echo "--- [2] СКРЫТАЯ ПАНЕЛЬ 3x-ui И XRAY (Reality + VK/Yandex CDN) ---"
         echo "URL панели 3x-ui:   https://${base_dom}/${SECRET_PANEL_PATH:-adm}/"
         echo "Логин / Пароль:     ${PANEL_USER:-admin} / ${PANEL_PASS:-не задан}"
+        echo "Единая подписка:    ${sub_url}  (Happ / v2rayNG / Hiddify)"
         if [[ -n "$xray_links" ]]; then
             echo "$xray_links"
         else
@@ -132,6 +141,10 @@ mod_dashboard_qr_menu() {
             esac
         done <<< "$xray_links"
 
+        local sub_uri=""
+        if [[ -n "${BASE_DOMAIN:-}" && -n "${SUB_TOKEN:-}" ]]; then
+            sub_uri="https://${BASE_DOMAIN}/sub/${SUB_TOKEN}"
+        fi
         local mtg_web=""
         [[ -n "${MTPROTO_SECRET:-}" ]] && mtg_web="https://t.me/proxy?server=${cur_ip}&port=${MTPROTO_PORT:-18445}&secret=${MTPROTO_SECRET}"
         local socks_web=""
@@ -139,20 +152,29 @@ mod_dashboard_qr_menu() {
 
         echo ""
         echo -e "${BOLD}--- QR-коды подключений (выберите нужный) ---${NC}"
-        echo " 1) VLESS-Reality (прямой с маскировкой)"
-        echo " 2) VLESS-XHTTP (прямой через домен)"
-        echo " 3) VK Cloud CDN (XHTTP GET-режим)"
-        echo " 4) Yandex Cloud CDN (XHTTP)"
-        echo " 5) Yandex Cloud CDN (WebSocket)"
-        echo " 6) AmneziaWG 3.1 (выбор клиентского профиля)"
-        echo " 7) Telegram MTProto Proxy"
-        echo " 8) Telegram SOCKS5 Proxy"
+        echo " 1) Единая подписка со всеми адресами (Happ / v2rayNG / Hiddify)"
+        echo " 2) VLESS-Reality (прямой с маскировкой)"
+        echo " 3) VLESS-XHTTP (прямой через домен)"
+        echo " 4) VK Cloud CDN (XHTTP GET-режим)"
+        echo " 5) Yandex Cloud CDN (XHTTP)"
+        echo " 6) Yandex Cloud CDN (WebSocket)"
+        echo " 7) AmneziaWG 3.1 (выбор клиентского профиля)"
+        echo " 8) Telegram MTProto Proxy"
+        echo " 9) Telegram SOCKS5 Proxy"
         echo " 0) Назад"
-        read -rp "Выберите QR-код [0-8]: " qr_choice
+        read -rp "Выберите QR-код [0-9]: " qr_choice
 
         local shown="true"
         case "$qr_choice" in
             1)
+                if [[ -n "$sub_uri" ]]; then
+                    _qr_show_payload "QR-код Единой подписки (Happ / v2rayNG / Hiddify)" "$sub_uri"
+                else
+                    log_warn "Единая подписка еще не сформирована (проверьте BASE_DOMAIN и модуль 05)."
+                    shown="false"
+                fi
+                ;;
+            2)
                 if [[ -n "$reality_uri" ]]; then
                     _qr_show_payload "QR-код VLESS-Reality" "$reality_uri"
                 else
@@ -160,7 +182,7 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            2)
+            3)
                 if [[ -n "$direct_xhttp_uri" ]]; then
                     _qr_show_payload "QR-код VLESS-XHTTP (Direct)" "$direct_xhttp_uri"
                 else
@@ -168,7 +190,7 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            3)
+            4)
                 if [[ -n "$vk_cdn_uri" ]]; then
                     _qr_show_payload "QR-код VK Cloud CDN (XHTTP GET)" "$vk_cdn_uri"
                 else
@@ -176,7 +198,7 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            4)
+            5)
                 if [[ -n "$ya_cdn_uri" ]]; then
                     _qr_show_payload "QR-код Yandex Cloud CDN (XHTTP)" "$ya_cdn_uri"
                 else
@@ -184,7 +206,7 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            5)
+            6)
                 if [[ -n "$ya_ws_uri" ]]; then
                     _qr_show_payload "QR-код Yandex Cloud CDN (WS)" "$ya_ws_uri"
                 else
@@ -192,7 +214,7 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            6)
+            7)
                 local -a awg_files=()
                 mapfile -t awg_files < <(find "${STATE_DIR}/clients" -maxdepth 1 -type f -name 'awg_*.vpn' 2>/dev/null | sort || true)
                 if [[ "${#awg_files[@]}" -eq 0 ]]; then
@@ -226,7 +248,7 @@ mod_dashboard_qr_menu() {
                     fi
                 fi
                 ;;
-            7)
+            8)
                 if [[ -n "$mtg_web" ]]; then
                     _qr_show_payload "QR-код Telegram MTProto Proxy" "$mtg_web"
                 else
@@ -234,7 +256,7 @@ mod_dashboard_qr_menu() {
                     shown="false"
                 fi
                 ;;
-            8)
+            9)
                 if [[ -n "$socks_web" ]]; then
                     _qr_show_payload "QR-код Telegram SOCKS5 Proxy" "$socks_web"
                 else

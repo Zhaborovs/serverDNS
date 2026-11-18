@@ -25,7 +25,7 @@ server {
 server {
     listen 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT} ssl;
     http2 on;
-    server_name ${BASE_DOMAIN} *.${BASE_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN};
+    server_name ${BASE_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN};
     large_client_header_buffers 8 32k;
 
     ssl_certificate     /etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem;
@@ -100,6 +100,22 @@ server {
         proxy_request_buffering off;
         client_max_body_size 2G;
         proxy_set_header Host $host;
+    }
+
+    # --- Единая подписка для VPN-приложений (Happ / v2rayNG / Hiddify / v2rayN) ---
+    location = /sub/${SUB_TOKEN} {
+        access_log off;
+        default_type "text/plain; charset=utf-8";
+        alias /etc/nginx/conf.d/sub_payload.b64;
+        add_header Profile-Title "base64:${SUB_TITLE_B64}" always;
+        add_header Profile-Update-Interval "6" always;
+        add_header Subscription-Userinfo "upload=0; download=0; total=0; expire=0" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    }
+
+    location ^~ /sub/ {
+        access_log off;
+        return 404;
     }
 
     # --- Сервис проверки скорости NetPulse (Download / Upload / Ping) ---
