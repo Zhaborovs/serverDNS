@@ -24,6 +24,7 @@ services:
     volumes:
       - /etc/x-ui:/etc/x-ui
       - /etc/letsencrypt:/root/cert:ro
+      - /etc/resolv.conf:/etc/resolv.conf:ro
     environment:
       - XRAY_VMESS_AEAD_FORCED=false
 

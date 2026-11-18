@@ -18,6 +18,38 @@
 # Зависимости: scripts/lib/firewall.sh
 # ==============================================================================
 
+_sys_fix_dns_and_ipv4_precedence() {
+    # 1. Отключаем stub-listener systemd-resolved на 53 порту и прописываем быстрый статический /etc/resolv.conf,
+    #    чтобы мертвые IPv6/DHCP DNS-серверы хостера не вызывали задержку 10 секунд (2x5с) при резолве доменов.
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat > /etc/systemd/resolved.conf.d/99-combain.conf <<'EOF'
+[Resolve]
+DNS=1.1.1.1 8.8.8.8
+DNSStubListener=no
+EOF
+        systemctl restart systemd-resolved 2>/dev/null || true
+    fi
+
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    rm -f /etc/resolv.conf
+    cat > /etc/resolv.conf <<'EOF'
+options timeout:1 attempts:2
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 9.9.9.9
+EOF
+
+    # 2. Приоритет IPv4 над сломанным маршрутом IPv6 на уровне системного getaddrinfo (/etc/gai.conf)
+    if [[ -f /etc/gai.conf ]]; then
+        if ! grep -qE '^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100' /etc/gai.conf; then
+            echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+        fi
+    else
+        echo "precedence ::ffff:0:0/96  100" > /etc/gai.conf
+    fi
+}
+
 mod_sys_hardening_apply() {
     log_step "Модуль 01: Системный hardening, лимиты дескрипторов и Google BBR+"
 
@@ -42,18 +74,9 @@ EOF
     # 2. Тюнинг ядра Linux и сетевого стека
     fw_apply_kernel_tuning
 
-    # 3. Освобождаем 127.0.0.53:53 от systemd-resolved, чтобы AdGuard Home мог занять порт 53
-    if systemctl is-active --quiet systemd-resolved; then
-        mkdir -p /etc/systemd/resolved.conf.d
-        cat > /etc/systemd/resolved.conf.d/99-combain.conf <<'EOF'
-[Resolve]
-DNS=1.1.1.1 8.8.8.8
-DNSStubListener=no
-EOF
-        systemctl restart systemd-resolved || true
-        ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf || true
-        log_ok "systemd-resolved stub listener отключен, порт 53 освобожден для AdGuard Home."
-    fi
+    # 3. Быстрый IPv4 DNS (1.1.1.1 / 8.8.8.8) без 10-секундных таймаутов хостера и освобождение порта 53
+    _sys_fix_dns_and_ipv4_precedence
+    log_ok "Быстрый системный DNS (1.1.1.1/8.8.8.8) и приоритет IPv4 настроены, порт 53 освобожден."
 
     # 4. Точечная защита внутренних портов через iptables
     fw_apply_base_rules

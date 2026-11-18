@@ -30,7 +30,8 @@ _xray_find_best_sni() {
 
         # Замеряем успешность TLS 1.3 + H2 и время установления TLS-соединения по IPv4
         local res code t_connect
-        res="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code} %{time_connect}" "https://${dom}/" 2>/dev/null || echo "000 99")"
+        res="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code} %{time_connect}" "https://${dom}/" 2>/dev/null || true)"
+        [[ -z "$res" ]] && res="000 99"
         code="${res%% *}"
         t_connect="${res##* }"
 
@@ -62,11 +63,15 @@ _xray_auto_select_reality_sni() {
 }
 
 _xray_heal_reality_sni_if_needed() {
+    if declare -f _sys_fix_dns_and_ipv4_precedence >/dev/null 2>&1; then
+        _sys_fix_dns_and_ipv4_precedence
+    fi
     state_load_silent
     local cur_sni="${REALITY_SNI:-}"
     local code="000"
     if [[ -n "$cur_sni" ]]; then
-        code="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code}" "https://${cur_sni}/" 2>/dev/null || echo "000")"
+        code="$(LC_ALL=C curl -4 -sS -I -o /dev/null --tlsv1.3 --http2 --connect-timeout 2 --max-time 3 -w "%{http_code}" "https://${cur_sni}/" 2>/dev/null || true)"
+        [[ -z "$code" ]] && code="000"
     fi
 
     if [[ -n "$code" && "$code" != "000" ]]; then
@@ -157,7 +162,12 @@ mod_xray_apply_inbounds() {
         --ya-ws-port "${XRAY_YA_WS_PORT:-20447}" \
         --ya-ws-path "${WS_YA_PATH}"
 
-    docker start combain-3xui >/dev/null
+    if declare -f _render_docker_compose >/dev/null 2>&1; then
+        _render_docker_compose
+        docker compose --env-file "$STATE_FILE" -f "${STATE_DIR}/docker-compose.yml" up -d --force-recreate 3x-ui >/dev/null
+    else
+        docker start combain-3xui >/dev/null
+    fi
 
     if declare -f mod_sniproxy_sync_domains >/dev/null 2>&1; then
         mod_sniproxy_sync_domains

@@ -424,6 +424,107 @@ def cmd_gen_keys(_: argparse.Namespace) -> int:
     return 0
 
 
+DEFAULT_XRAY_TEMPLATE = {
+    "api": {
+        "services": ["HandlerService", "LoggerService", "StatsService", "RoutingService"],
+        "tag": "api",
+    },
+    "dns": {
+        "servers": ["1.1.1.1", "8.8.8.8"],
+        "queryStrategy": "UseIPv4",
+    },
+    "inbounds": [
+        {
+            "listen": "127.0.0.1",
+            "port": 62789,
+            "protocol": "tunnel",
+            "settings": {"rewriteAddress": "127.0.0.1"},
+            "tag": "api",
+        }
+    ],
+    "log": {"access": "none", "dnsLog": False, "error": "", "loglevel": "warning", "maskAddress": ""},
+    "metrics": {"listen": "127.0.0.1:11111", "tag": "metrics_out"},
+    "outbounds": [
+        {
+            "protocol": "freedom",
+            "settings": {
+                "finalRules": [
+                    {"action": "block", "ip": ["geoip:private"]},
+                    {"action": "allow"},
+                ]
+            },
+            "streamSettings": {
+                "sockopt": {
+                    "domainStrategy": "UseIPv4",
+                    "tcpFastOpen": True,
+                }
+            },
+            "tag": "direct",
+        },
+        {"protocol": "blackhole", "settings": {}, "tag": "blocked"},
+    ],
+    "policy": {
+        "levels": {"0": {"statsUserDownlink": True, "statsUserUplink": True}},
+        "system": {
+            "statsInboundDownlink": True,
+            "statsInboundUplink": True,
+            "statsOutboundDownlink": False,
+            "statsOutboundUplink": False,
+        },
+    },
+    "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+            {"inboundTag": ["api"], "outboundTag": "api", "type": "field"},
+            {"ip": ["geoip:private"], "outboundTag": "blocked", "type": "field"},
+            {"outboundTag": "blocked", "protocol": ["bittorrent"], "type": "field"},
+        ],
+    },
+    "stats": {},
+}
+
+
+def ensure_fast_ipv4_xray_template(conn: sqlite3.Connection) -> None:
+    """Включает встроенный быстрый IPv4 DNS (1.1.1.1/8.8.8.8) и UseIPv4 на freedom outbound."""
+    row = conn.execute("SELECT value FROM settings WHERE key = 'xrayTemplateConfig'").fetchone()
+    tpl = None
+    if row and row[0]:
+        try:
+            parsed = json.loads(row[0])
+            if isinstance(parsed, dict):
+                tpl = parsed
+        except Exception:
+            tpl = None
+    if not tpl:
+        tpl = json.loads(json.dumps(DEFAULT_XRAY_TEMPLATE))
+
+    tpl["dns"] = {
+        "servers": ["1.1.1.1", "8.8.8.8"],
+        "queryStrategy": "UseIPv4",
+    }
+    outbounds = tpl.get("outbounds")
+    if isinstance(outbounds, list):
+        for ob in outbounds:
+            if isinstance(ob, dict) and ob.get("protocol") == "freedom":
+                ob.pop("targetStrategy", None)
+                settings = ob.get("settings")
+                if isinstance(settings, dict):
+                    settings.pop("domainStrategy", None)
+                    settings.pop("targetStrategy", None)
+                stream = ob.setdefault("streamSettings", {})
+                if not isinstance(stream, dict):
+                    stream = {}
+                    ob["streamSettings"] = stream
+                sockopt = stream.setdefault("sockopt", {})
+                if not isinstance(sockopt, dict):
+                    sockopt = {}
+                    stream["sockopt"] = sockopt
+                sockopt["domainStrategy"] = "UseIPv4"
+                sockopt["tcpFastOpen"] = True
+
+    upsert_setting(conn, "xrayTemplateConfig", json.dumps(tpl, indent=2))
+
+
 def cmd_init_all(args: argparse.Namespace) -> int:
     args.db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(args.db))
@@ -433,6 +534,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
         upsert_setting(conn, "webListen", "127.0.0.1")
         upsert_setting(conn, "webPort", str(args.panel_port))
         upsert_setting(conn, "webBasePath", panel_path)
+        ensure_fast_ipv4_xray_template(conn)
 
         # 1. VLESS-Reality (127.0.0.1:20443, трафик приходит от sniproxy)
         reality_stream = {
@@ -596,7 +698,7 @@ def _collect_vless_links(
                 "host": args.base_domain,
                 "fp": "chrome",
                 "path": f"/{args.ya_xhttp_path.lstrip('/')}",
-                "mode": "auto",
+                "mode": "packet-up",
             }
         else:
             direct_params = {
