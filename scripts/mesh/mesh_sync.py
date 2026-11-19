@@ -467,7 +467,40 @@ class MeshSyncEngine:
             for peer in peers:
                 stats = self.sync_with_peer(peer)
                 results[peer["node_id"]] = stats is not None
+
+            self._update_cascade_state()
         return results
+
+    def _update_cascade_state(self) -> None:
+        """Persist active local role & healthy exit failover target next to mesh.db."""
+        if not self.local_node_id:
+            return
+        local_node = self.db.get_node(self.local_node_id)
+        if not local_node:
+            return
+        try:
+            target_exit = (
+                self.db.select_cascade_exit(local_node_id=self.local_node_id)
+                if local_node.get("role") == "ru_relay"
+                else None
+            )
+            state_out = {
+                "local_node_id": self.local_node_id,
+                "local_role": local_node.get("role"),
+                "updated_at": now_ms(),
+                "cascade_exit": {
+                    "node_id": target_exit["node_id"],
+                    "name": target_exit["name"],
+                    "mesh_ip": target_exit["mesh_ip"],
+                    "base_domain": target_exit["base_domain"],
+                }
+                if target_exit
+                else None,
+            }
+            out_path = self.db.db_path.parent / "mesh_cascade_target.json"
+            out_path.write_text(json.dumps(state_out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
     def sync_xui(self) -> int:
         """Sync active mesh users into local 3x-ui DB / callback."""

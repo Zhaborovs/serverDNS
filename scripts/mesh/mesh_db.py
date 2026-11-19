@@ -95,6 +95,18 @@ class MeshDB:
                 self._conn.execute(
                     "ALTER TABLE user_devices ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"
                 )
+            # Ensure `wg_pubkey` and `wg_port` exist on nodes for older schemas
+            node_cols = {
+                r[1] for r in self._conn.execute("PRAGMA table_info(nodes)").fetchall()
+            }
+            if "wg_pubkey" not in node_cols:
+                self._conn.execute(
+                    "ALTER TABLE nodes ADD COLUMN wg_pubkey TEXT NOT NULL DEFAULT ''"
+                )
+            if "wg_port" not in node_cols:
+                self._conn.execute(
+                    "ALTER TABLE nodes ADD COLUMN wg_port INTEGER NOT NULL DEFAULT 51829"
+                )
             self._conn.commit()
 
     def close(self) -> None:
@@ -151,6 +163,8 @@ class MeshDB:
         ws_path: str = "",
         vless_pub_key: str = "",
         awg_port: int = 0,
+        wg_pubkey: str = "",
+        wg_port: int = 51829,
         status: str = "online",
         last_seen: int | None = None,
         updated_at: int | None = None,
@@ -171,9 +185,9 @@ class MeshDB:
                     """
                     INSERT INTO nodes (
                         node_id, name, role, public_ip, mesh_ip, base_domain, dns_domain,
-                        xhttp_path, ws_path, vless_pub_key, awg_port, status, last_seen,
-                        updated_at, deleted
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        xhttp_path, ws_path, vless_pub_key, awg_port, wg_pubkey, wg_port,
+                        status, last_seen, updated_at, deleted
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(node_id) DO UPDATE SET
                         name = excluded.name,
                         role = excluded.role,
@@ -185,6 +199,8 @@ class MeshDB:
                         ws_path = excluded.ws_path,
                         vless_pub_key = excluded.vless_pub_key,
                         awg_port = excluded.awg_port,
+                        wg_pubkey = CASE WHEN excluded.wg_pubkey != '' THEN excluded.wg_pubkey ELSE nodes.wg_pubkey END,
+                        wg_port = CASE WHEN excluded.wg_port > 0 THEN excluded.wg_port ELSE nodes.wg_port END,
                         status = excluded.status,
                         last_seen = excluded.last_seen,
                         updated_at = excluded.updated_at,
@@ -202,6 +218,8 @@ class MeshDB:
                         ws_path,
                         vless_pub_key,
                         int(awg_port),
+                        str(wg_pubkey or ""),
+                        int(wg_port or 51829),
                         status,
                         seen,
                         ts,
@@ -211,6 +229,51 @@ class MeshDB:
             row = self.get_node(nid)
             assert row is not None
             return row
+
+    def set_node_role(self, node_id_or_name: str, role: str) -> dict[str, Any]:
+        """Change any node's role ('exit' or 'ru_relay') from any cluster member via LWW."""
+        if role not in ("ru_relay", "exit"):
+            raise ValueError(f"Invalid node role: {role!r} (expected 'ru_relay' or 'exit')")
+        target = (node_id_or_name or "").strip()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM nodes WHERE deleted = 0 AND (node_id = ? OR name = ?) LIMIT 1",
+                (target, target),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"Node not found: {target}")
+            ts = self._next_ts(int(row["updated_at"]))
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE nodes SET role = ?, updated_at = ? WHERE node_id = ?",
+                    (role, ts, row["node_id"]),
+                )
+            updated = self.get_node(str(row["node_id"]))
+            assert updated is not None
+            return updated
+
+    def allocate_next_mesh_ip(self, subnet_prefix: str = "10.99.0.") -> str:
+        """Pick the lowest free IP in subnet_prefix (from .2 to .250)."""
+        used: set[int] = set()
+        for n in self.list_nodes(include_deleted=False):
+            mip = str(n.get("mesh_ip") or "").strip().split("/")[0]
+            if mip.startswith(subnet_prefix):
+                try:
+                    used.add(int(mip[len(subnet_prefix):]))
+                except ValueError:
+                    pass
+        for octet in range(2, 251):
+            if octet not in used:
+                return f"{subnet_prefix}{octet}"
+        raise RuntimeError(f"No free mesh IPs left in {subnet_prefix}0/24")
+
+    def select_cascade_exit(self, local_node_id: str | None = None) -> dict[str, Any] | None:
+        """Return the best currently online exit node (for automatic ru_relay failover)."""
+        healthy = self.get_healthy_nodes(local_node_id=local_node_id)
+        for n in healthy:
+            if n.get("role") == "exit" and n.get("node_id") != (local_node_id or ""):
+                return n
+        return None
 
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -646,9 +709,9 @@ class MeshDB:
                 """
                 INSERT INTO nodes (
                     node_id, name, role, public_ip, mesh_ip, base_domain, dns_domain,
-                    xhttp_path, ws_path, vless_pub_key, awg_port, status, last_seen,
-                    updated_at, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    xhttp_path, ws_path, vless_pub_key, awg_port, wg_pubkey, wg_port,
+                    status, last_seen, updated_at, deleted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     nid,
@@ -662,6 +725,8 @@ class MeshDB:
                     str(item.get("ws_path") or ""),
                     str(item.get("vless_pub_key") or ""),
                     int(item.get("awg_port") or 0),
+                    str(item.get("wg_pubkey") or ""),
+                    int(item.get("wg_port") or 51829),
                     in_status,
                     in_seen or now_ms(),
                     in_ts,
@@ -678,12 +743,15 @@ class MeshDB:
         # Preserve local health status unless node is being deleted
         merged_status = "offline" if in_del else str(existing["status"])
         merged_seen = max(int(existing["last_seen"]), in_seen)
+        merged_wg_pub = str(item.get("wg_pubkey") or "") or str(existing["wg_pubkey"] or "")
+        merged_wg_port = int(item.get("wg_port") or 0) or int(existing["wg_port"] or 51829)
         self._conn.execute(
             """
             UPDATE nodes SET
                 name = ?, role = ?, public_ip = ?, mesh_ip = ?, base_domain = ?,
                 dns_domain = ?, xhttp_path = ?, ws_path = ?, vless_pub_key = ?,
-                awg_port = ?, status = ?, last_seen = ?, updated_at = ?, deleted = ?
+                awg_port = ?, wg_pubkey = ?, wg_port = ?, status = ?, last_seen = ?,
+                updated_at = ?, deleted = ?
             WHERE node_id = ?
             """,
             (
@@ -697,6 +765,8 @@ class MeshDB:
                 str(item.get("ws_path") or ""),
                 str(item.get("vless_pub_key") or ""),
                 int(item.get("awg_port") or 0),
+                merged_wg_pub,
+                merged_wg_port,
                 merged_status,
                 merged_seen,
                 in_ts,

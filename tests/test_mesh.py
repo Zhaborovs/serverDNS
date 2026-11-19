@@ -551,6 +551,56 @@ class TestCombainMesh(unittest.TestCase):
         self.assertEqual(disabled_ct[0], 0)
         conn.close()
 
+    def test_invite_token_remote_role_switch_and_cascade_failover(self) -> None:
+        """Verify 1-line invite token, auto mesh IP allocation, remote LWW role switch, and cascade failover."""
+        from scripts.mesh.combain_mesh import decode_invite_token, main as cli_main
+        import io
+        from contextlib import redirect_stdout
+
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            db_a_path = tdp / "inv_a.db"
+            db_b_path = tdp / "inv_b.db"
+
+            def _run_cli(dbp: Path, *argv: str) -> str:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = cli_main([*argv, "--db", str(dbp)])
+                self.assertEqual(rc, 0, f"CLI failed for {argv}")
+                return buf.getvalue().strip()
+
+            _run_cli(
+                db_a_path, "init-node", "--node-id", "ru-1", "--name", "ru-msk",
+                "--role", "ru_relay", "--public-ip", "1.2.3.4", "--mesh-ip", "10.99.0.1",
+                "--wg-pubkey", "WG_PUB_RU1", "--wg-port", "51829", "--secret", TEST_SECRET,
+            )
+            token = _run_cli(db_a_path, "invite-create")
+            self.assertTrue(token.startswith("combain-join://"))
+            decoded = decode_invite_token(token)
+            self.assertEqual(decoded["secret"], TEST_SECRET)
+            self.assertEqual(decoded["assigned_mesh_ip"], "10.99.0.2")
+            self.assertEqual(decoded["peers"][0]["wg_pubkey"], "WG_PUB_RU1")
+
+            # Simulate remote role change on node B and LWW merge back to node A
+            with MeshDB(db_a_path) as dba, MeshDB(db_b_path) as dbb:
+                dba.upsert_node(node_id="de-1", name="de-1", role="exit", mesh_ip="10.99.0.2", status="online")
+                dba.upsert_node(node_id="nl-1", name="nl-1", role="exit", mesh_ip="10.99.0.3", status="online")
+                dbb.merge_delta(dba.export_delta(0))
+
+                # Remote node B switches de-1 -> ru_relay
+                dbb.set_node_role("de-1", "ru_relay")
+                dba.merge_delta(dbb.export_delta(0))
+                self.assertEqual(dba.get_node("de-1")["role"], "ru_relay")
+
+                # Cascade exit on ru-1 must now pick nl-1 (only remaining online exit)
+                target = dba.select_cascade_exit(local_node_id="ru-1")
+                self.assertIsNotNone(target)
+                self.assertEqual(target["node_id"], "nl-1")
+
+                # Mark nl-1 offline -> no online exit left
+                dba.mark_node_status("nl-1", "offline")
+                self.assertIsNone(dba.select_cascade_exit(local_node_id="ru-1"))
+
 
 if __name__ == "__main__":
     unittest.main()

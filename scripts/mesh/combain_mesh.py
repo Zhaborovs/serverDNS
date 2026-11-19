@@ -11,6 +11,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import signal
 import sys
 import time
 from typing import Any
+import urllib.request
 
 # Allow running directly as `python3 scripts/mesh/combain_mesh.py` as well as `-m scripts.mesh.combain_mesh`
 if __package__ in (None, ""):
@@ -122,13 +124,52 @@ def _format_expiry(expires_at: int) -> str:
     return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(expires_at / 1000))
 
 
+INVITE_PREFIX = "combain-join://"
+
+
+def detect_role_by_geoip(timeout_sec: float = 3.0) -> tuple[str, str]:
+    """Auto-detect node role by external IP country: RU -> 'ru_relay', foreign -> 'exit'."""
+    for url in ("https://ipinfo.io/country", "https://ifconfig.co/country-iso"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "combain-mesh/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                cc = resp.read().decode("utf-8", errors="ignore").strip().upper()
+                if len(cc) == 2 and cc.isalpha():
+                    return ("ru_relay" if cc == "RU" else "exit"), cc
+        except Exception:
+            continue
+    return "exit", "UNKNOWN"
+
+
+def encode_invite_token(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    b64 = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return f"{INVITE_PREFIX}{b64}"
+
+
+def decode_invite_token(token: str) -> dict[str, Any]:
+    tok = (token or "").strip()
+    if tok.startswith(INVITE_PREFIX):
+        tok = tok[len(INVITE_PREFIX):]
+    pad = "=" * (-len(tok) % 4)
+    raw = base64.urlsafe_b64decode(tok + pad)
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict) or not data.get("secret"):
+        raise ValueError("Invalid Combain-Mesh invite token")
+    return data
+
+
 def cmd_init_node(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args)
+    role = args.role
+    detected_cc = ""
+    if role == "auto":
+        role, detected_cc = detect_role_by_geoip()
     with MeshDB(db_path) as db:
         node = db.upsert_node(
             node_id=args.node_id or db.get_meta("local_node_id") or None,
             name=args.name,
-            role=args.role,
+            role=role,
             public_ip=args.public_ip,
             mesh_ip=args.mesh_ip,
             base_domain=args.base_domain,
@@ -137,6 +178,8 @@ def cmd_init_node(args: argparse.Namespace) -> int:
             ws_path=args.ws_path,
             vless_pub_key=args.vless_pub_key,
             awg_port=args.awg_port,
+            wg_pubkey=getattr(args, "wg_pubkey", ""),
+            wg_port=getattr(args, "wg_port", 51829),
             status="online",
             last_seen=now_ms(),
         )
@@ -148,11 +191,15 @@ def cmd_init_node(args: argparse.Namespace) -> int:
         if arg_port is not None:
             db.set_meta("api_port", str(arg_port))
         if getattr(args, "json", False):
-            print(json.dumps(node, ensure_ascii=False, indent=2))
+            out = dict(node)
+            if detected_cc:
+                out["detected_country"] = detected_cc
+            print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
+            cc_note = f" (GeoIP: {detected_cc})" if detected_cc else ""
             print(
                 f"[OK] Node initialized: id={node['node_id']} name={node['name']} "
-                f"role={node['role']} mesh_ip={node['mesh_ip']} domain={node['base_domain']}"
+                f"role={node['role']}{cc_note} mesh_ip={node['mesh_ip']} domain={node['base_domain']}"
             )
     return 0
 
@@ -179,6 +226,8 @@ def cmd_join_peer(args: argparse.Namespace) -> int:
             ws_path=args.ws_path,
             vless_pub_key=args.vless_pub_key,
             awg_port=args.awg_port,
+            wg_pubkey=getattr(args, "wg_pubkey", ""),
+            wg_port=getattr(args, "wg_port", 51829),
             status="online",
             last_seen=now_ms(),
         )
@@ -203,6 +252,94 @@ def cmd_join_peer(args: argparse.Namespace) -> int:
                 f"[OK] Peer added: id={peer['node_id']} mesh_ip={peer['mesh_ip']} "
                 f"role={peer['role']} synced={synced}"
             )
+    return 0
+
+
+def cmd_invite_create(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args)
+    with MeshDB(db_path) as db:
+        secret = _resolve_secret(args, db)
+        if not secret:
+            print("[ERR] MESH_SECRET is not set. Run init-node first.", file=sys.stderr)
+            return 2
+        subnet_prefix = (getattr(args, "subnet_prefix", "") or "10.99.0.").strip()
+        if not subnet_prefix.endswith("."):
+            subnet_prefix += "."
+        assigned_ip = (getattr(args, "assign_mesh_ip", "") or "").strip() or db.allocate_next_mesh_ip(subnet_prefix)
+        api_port = _resolve_port(args, db)
+        peers = []
+        for n in db.list_nodes(include_deleted=False):
+            peers.append(
+                {
+                    "node_id": n["node_id"],
+                    "name": n["name"],
+                    "role": n["role"],
+                    "public_ip": n["public_ip"],
+                    "mesh_ip": n["mesh_ip"],
+                    "wg_pubkey": n.get("wg_pubkey", ""),
+                    "wg_port": int(n.get("wg_port") or 51829),
+                }
+            )
+        payload = {
+            "v": 1,
+            "secret": secret,
+            "assigned_mesh_ip": assigned_ip,
+            "api_port": api_port,
+            "peers": peers,
+        }
+        token = encode_invite_token(payload)
+        if getattr(args, "json", False):
+            print(json.dumps({"token": token, "payload": payload}, ensure_ascii=False, indent=2))
+        else:
+            print(token)
+    return 0
+
+
+def cmd_invite_parse(args: argparse.Namespace) -> int:
+    try:
+        payload = decode_invite_token(args.token)
+    except Exception as exc:
+        print(f"[ERR] {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_node_set_role(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args)
+    with MeshDB(db_path) as db:
+        try:
+            node = db.set_node_role(args.node, args.role)
+        except (KeyError, ValueError) as exc:
+            print(f"[ERR] {exc}", file=sys.stderr)
+            return 1
+        if not args.no_sync:
+            _push_to_peers_best_effort(db, args)
+        if getattr(args, "json", False):
+            print(json.dumps(node, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"[OK] Node role updated (replicates via LWW): "
+                f"name={node['name']} id={node['node_id']} role={node['role']}"
+            )
+    return 0
+
+
+def cmd_cascade_target(args: argparse.Namespace) -> int:
+    db_path = _resolve_db_path(args)
+    with MeshDB(db_path) as db:
+        local_node_id = db.get_meta("local_node_id", "")
+        target = db.select_cascade_exit(local_node_id=local_node_id)
+        if getattr(args, "json", False):
+            print(json.dumps(target, ensure_ascii=False, indent=2))
+        else:
+            if target:
+                print(
+                    f"[OK] Active cascade exit: name={target['name']} "
+                    f"mesh_ip={target['mesh_ip']} domain={target['base_domain']}"
+                )
+            else:
+                print("[WARN] No online exit nodes found in cluster.")
     return 0
 
 
@@ -459,7 +596,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = sub.add_parser("init-node", parents=[common], help="Initialize local mesh node")
     p_init.add_argument("--node-id", default="", help="Explicit node ID (default: auto UUID)")
     p_init.add_argument("--name", default="node", help="Human-readable node name")
-    p_init.add_argument("--role", choices=("ru_relay", "exit"), default="exit")
+    p_init.add_argument("--role", choices=("auto", "ru_relay", "exit"), default="auto")
     p_init.add_argument("--public-ip", default="")
     p_init.add_argument("--mesh-ip", default="")
     p_init.add_argument("--base-domain", default="")
@@ -468,6 +605,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--ws-path", default="")
     p_init.add_argument("--vless-pub-key", default="")
     p_init.add_argument("--awg-port", type=int, default=0)
+    p_init.add_argument("--wg-pubkey", default="")
+    p_init.add_argument("--wg-port", type=int, default=51829)
 
     # join-peer
     p_join = sub.add_parser("join-peer", parents=[common], help="Register a peer node and sync")
@@ -483,7 +622,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_join.add_argument("--ws-path", default="")
     p_join.add_argument("--vless-pub-key", default="")
     p_join.add_argument("--awg-port", type=int, default=0)
+    p_join.add_argument("--wg-pubkey", default="")
+    p_join.add_argument("--wg-port", type=int, default=51829)
     p_join.add_argument("--no-sync", action="store_true", help="Do not sync immediately")
+
+    # invite-create
+    p_inv_c = sub.add_parser("invite-create", parents=[common], help="Generate 1-line combain-join:// invite token")
+    p_inv_c.add_argument("--subnet-prefix", default="10.99.0.", help="Mesh subnet prefix")
+    p_inv_c.add_argument("--assign-mesh-ip", default="", help="Explicit mesh IP to assign (default: auto)")
+
+    # invite-parse
+    p_inv_p = sub.add_parser("invite-parse", parents=[common], help="Decode combain-join:// invite token to JSON")
+    p_inv_p.add_argument("--token", required=True)
+
+    # node-set-role
+    p_role = sub.add_parser("node-set-role", parents=[common], help="Change any cluster node role (exit <-> ru_relay)")
+    p_role.add_argument("--node", required=True, help="Node ID or node name")
+    p_role.add_argument("--role", choices=("ru_relay", "exit"), required=True)
+    p_role.add_argument("--no-sync", action="store_true")
+
+    # cascade-target
+    sub.add_parser("cascade-target", parents=[common], help="Show active healthy exit node for RU relay cascade")
 
     # daemon
     p_daemon = sub.add_parser("daemon", parents=[common], help="Run P2P sync & HTTP API daemon")
@@ -555,6 +714,14 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_init_node(args)
     if cmd == "join-peer":
         return cmd_join_peer(args)
+    if cmd == "invite-create":
+        return cmd_invite_create(args)
+    if cmd == "invite-parse":
+        return cmd_invite_parse(args)
+    if cmd == "node-set-role":
+        return cmd_node_set_role(args)
+    if cmd == "cascade-target":
+        return cmd_cascade_target(args)
     if cmd == "daemon":
         return cmd_daemon(args)
     if cmd == "user-add":

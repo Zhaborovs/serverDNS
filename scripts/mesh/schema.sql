@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     ws_path TEXT NOT NULL DEFAULT '',
     vless_pub_key TEXT NOT NULL DEFAULT '',
     awg_port INTEGER NOT NULL DEFAULT 0,
+    wg_pubkey TEXT NOT NULL DEFAULT '',
+    wg_port INTEGER NOT NULL DEFAULT 51829,
     status TEXT NOT NULL DEFAULT 'online',
     last_seen INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL DEFAULT 0,

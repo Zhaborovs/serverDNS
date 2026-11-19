@@ -194,12 +194,14 @@ mod_mesh_init_node() {
     if [[ -t 0 && "${MESH_NONINTERACTIVE:-0}" != "1" ]]; then
         echo ""
         echo "Выберите роль этой ноды в кластере:"
+        echo "  0) auto     — определить автоматически по стране IP (RU -> ru_relay, иначе -> exit)"
         echo "  1) exit     — зарубежный выходной сервер (DE / NL / FI и др.)"
         echo "  2) ru_relay — российский ретранслятор (входная точка в РФ -> каскад на exit)"
-        read -rp "Роль ноды [1-2, по умолч. 1]: " in_role
-        case "${in_role:-1}" in
+        read -rp "Роль ноды [0-2, по умолч. 0 (auto)]: " in_role
+        case "${in_role:-0}" in
+            1|exit)     in_role="exit" ;;
             2|ru_relay) in_role="ru_relay" ;;
-            *)          in_role="exit" ;;
+            *)          in_role="auto" ;;
         esac
 
         read -rp "Имя ноды в кластере [${default_name}]: " in_name
@@ -247,8 +249,9 @@ mod_mesh_init_node() {
     _mesh_setup_wireguard
     _mesh_apply_firewall
 
-    local py_bin
+    local py_bin wg_pub=""
     py_bin="$(_mesh_py_bin)"
+    [[ -f "${MESH_WG_DIR}/public.key" ]] && wg_pub="$(tr -d ' \n\r' < "${MESH_WG_DIR}/public.key")"
     local init_args=(
         init-node
         --state-dir "${STATE_DIR}"
@@ -256,18 +259,25 @@ mod_mesh_init_node() {
         --role "${in_role}"
         --public-ip "${pub_ip}"
         --mesh-ip "${in_ip}"
+        --wg-port "${in_wg_port}"
     )
+    [[ -n "$wg_pub" ]] && init_args+=(--wg-pubkey "$wg_pub")
     [[ -n "${BASE_DOMAIN:-}" ]] && init_args+=(--base-domain "${BASE_DOMAIN}")
     [[ -n "${DNS_DOMAIN:-}" ]]  && init_args+=(--dns-domain "${DNS_DOMAIN}")
     [[ -n "${XHTTP_YA_PATH:-}" ]] && init_args+=(--xhttp-path "${XHTTP_YA_PATH}")
     [[ -n "${WS_YA_PATH:-}" ]]    && init_args+=(--ws-path "${WS_YA_PATH}")
+    [[ -n "${REALITY_PUBLIC_KEY:-}" ]] && init_args+=(--vless-pub-key "${REALITY_PUBLIC_KEY}")
     [[ -n "${AWG_PORT:-}" ]]      && init_args+=(--awg-port "${AWG_PORT}")
 
-    python3 "$py_bin" "${init_args[@]}"
+    local init_json
+    init_json="$(python3 "$py_bin" "${init_args[@]}" --json)"
+    local resolved_role
+    resolved_role="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('role','exit'))" "$init_json" 2>/dev/null || echo "exit")"
+    state_set "MESH_ROLE" "$resolved_role"
 
     _mesh_install_systemd
     mod_mesh_show_node_card
-    log_ok "Нода '${in_name}' (${in_role}) успешно инициализирована в Combain-Mesh."
+    log_ok "Нода '${in_name}' (роль: ${resolved_role}) успешно инициализирована в Combain-Mesh."
 }
 
 # 2. Подключение соседней ноды (WireGuard wg-mesh0 + combain_mesh.py join-peer)
@@ -521,6 +531,140 @@ EOF
     echo "  4. Для прямого проброса TCP 443 на exit-ноду можно использовать Xray Dokodemo-door или Freedom outbound в 3x-ui."
 }
 
+# Инвайт-токен в 1 строку для подключения нового сервера к кластеру
+mod_mesh_create_invite() {
+    state_load_silent
+    _mesh_require_cli || return 1
+    if [[ "${MESH_ENABLED:-0}" != "1" ]]; then
+        log_warn "Сначала инициализируйте эту ноду (пункт 1)."
+        return 1
+    fi
+    local token
+    token="$(python3 "$(_mesh_py_bin)" invite-create --state-dir "${STATE_DIR}")" || return 1
+    echo ""
+    echo -e "${CYAN}====================================================================${NC}"
+    echo -e "${BOLD}   Инвайт-токен для нового сервера (вставьте на новом VPS в пункт 3)${NC}"
+    echo -e "${CYAN}====================================================================${NC}"
+    echo "$token"
+    echo -e "${CYAN}====================================================================${NC}"
+}
+
+# Подключение нового сервера к кластеру по 1-строчному инвайт-токену (авто-роль + авто-WG)
+mod_mesh_join_by_invite() {
+    log_step "Подключение этого сервера к кластеру по инвайт-токену"
+    state_load_silent
+    _mesh_require_cli || return 1
+    _mesh_ensure_dirs
+
+    local inv_token
+    read -rp "Вставьте строку инвайт-токена (combain-join://...): " inv_token
+    if [[ -z "$inv_token" ]]; then
+        log_warn "Токен не введен."
+        return 1
+    fi
+
+    local py_bin parsed_json
+    py_bin="$(_mesh_py_bin)"
+    parsed_json="$(python3 "$py_bin" invite-parse --token "$inv_token")" || return 1
+
+    local secret assigned_ip api_port
+    secret="$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['secret'])" "$parsed_json")"
+    assigned_ip="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('assigned_mesh_ip','10.99.0.2'))" "$parsed_json")"
+    api_port="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('api_port',22777))" "$parsed_json")"
+
+    local default_name
+    default_name="${MESH_NODE_NAME:-$(hostname -s 2>/dev/null || echo 'node-new')}"
+    read -rp "Имя этой ноды [${default_name}]: " in_name
+    in_name="${in_name:-$default_name}"
+
+    echo "Роль ноды: Enter = определить автоматически по стране IP (RU -> ru_relay, иначе -> exit)"
+    read -rp "Роль [auto / exit / ru_relay, по умолч. auto]: " in_role
+    in_role="${in_role:-auto}"
+
+    state_set "MESH_ENABLED" "1"
+    state_set "MESH_NODE_NAME" "$in_name"
+    state_set "MESH_WG_SUBNET" "${MESH_WG_SUBNET:-10.99.0.0/24}"
+    state_set "MESH_WG_IP" "$assigned_ip"
+    state_set "MESH_WG_PORT" "${MESH_WG_PORT:-51829}"
+    state_set "MESH_API_PORT" "$api_port"
+    state_set "MESH_SECRET" "$secret"
+
+    local pub_ip="${SERVER_IP:-$(detect_server_ip 2>/dev/null || true)}"
+    [[ -n "$pub_ip" && -z "${SERVER_IP:-}" ]] && state_set "SERVER_IP" "$pub_ip"
+
+    _mesh_setup_wireguard
+    _mesh_apply_firewall
+
+    local wg_pub=""
+    [[ -f "${MESH_WG_DIR}/public.key" ]] && wg_pub="$(tr -d ' \n\r' < "${MESH_WG_DIR}/public.key")"
+    local init_args=(
+        init-node
+        --state-dir "${STATE_DIR}"
+        --name "${in_name}"
+        --role "${in_role}"
+        --public-ip "${pub_ip}"
+        --mesh-ip "${assigned_ip}"
+        --wg-port "${MESH_WG_PORT:-51829}"
+    )
+    [[ -n "$wg_pub" ]] && init_args+=(--wg-pubkey "$wg_pub")
+    [[ -n "${BASE_DOMAIN:-}" ]] && init_args+=(--base-domain "${BASE_DOMAIN}")
+    [[ -n "${DNS_DOMAIN:-}" ]]  && init_args+=(--dns-domain "${DNS_DOMAIN}")
+    [[ -n "${XHTTP_YA_PATH:-}" ]] && init_args+=(--xhttp-path "${XHTTP_YA_PATH}")
+    [[ -n "${WS_YA_PATH:-}" ]]    && init_args+=(--ws-path "${WS_YA_PATH}")
+    [[ -n "${REALITY_PUBLIC_KEY:-}" ]] && init_args+=(--vless-pub-key "${REALITY_PUBLIC_KEY}")
+    [[ -n "${AWG_PORT:-}" ]]      && init_args+=(--awg-port "${AWG_PORT}")
+
+    local init_json resolved_role
+    init_json="$(python3 "$py_bin" "${init_args[@]}" --json)"
+    resolved_role="$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('role','exit'))" "$init_json" 2>/dev/null || echo "exit")"
+    state_set "MESH_ROLE" "$resolved_role"
+
+    # Автоматически добавляем всех существующих пиров из инвайта в wg-mesh0 и mesh.db
+    local peers_lines
+    peers_lines="$(python3 -c "
+import json, sys
+for p in json.loads(sys.argv[1]).get('peers', []):
+    print('|'.join(str(p.get(k,'')) for k in ('node_id','name','role','public_ip','mesh_ip','wg_port','wg_pubkey')))
+" "$parsed_json")"
+    while IFS='|' read -r p_id p_name p_role p_pubip p_mip p_wgp p_wgpub; do
+        [[ -z "$p_mip" ]] && continue
+        if [[ -n "$p_wgpub" && -n "$p_pubip" ]]; then
+            _mesh_wg_add_peer "$p_wgpub" "$p_mip" "${p_pubip}:${p_wgp:-51829}"
+        fi
+        python3 "$py_bin" join-peer \
+            --state-dir "${STATE_DIR}" \
+            --peer-node-id "$p_id" \
+            --name "$p_name" \
+            --role "${p_role:-exit}" \
+            --public-ip "$p_pubip" \
+            --mesh-ip "$p_mip" \
+            --wg-pubkey "$p_wgpub" \
+            --wg-port "${p_wgp:-51829}" \
+            --no-sync >/dev/null || true
+    done <<< "$peers_lines"
+
+    _mesh_install_systemd
+    python3 "$py_bin" sync-now --state-dir "${STATE_DIR}" || true
+    log_ok "Нода '${in_name}' (роль: ${resolved_role}, Mesh IP: ${assigned_ip}) подключена к кластеру!"
+    log_info "На старом сервере добавьте WG PubKey этой ноды (если еще не добавлен): ${wg_pub}"
+}
+
+# Смена роли любого узла в кластере (exit <-> ru_relay) с любого живого сервера
+mod_mesh_set_node_role() {
+    state_load_silent
+    _mesh_require_cli || return 1
+    local py_bin
+    py_bin="$(_mesh_py_bin)"
+    echo ""
+    python3 "$py_bin" node-list --state-dir "${STATE_DIR}"
+    echo ""
+    local target_node target_role
+    read -rp "Введите имя или node_id узла: " target_node
+    [[ -z "$target_node" ]] && return 0
+    read -rp "Новая роль (exit / ru_relay): " target_role
+    python3 "$py_bin" node-set-role --state-dir "${STATE_DIR}" --node "$target_node" --role "$target_role"
+}
+
 # Главное меню модуля 10 (вызывается из combain.sh пункт 9 и `combain mesh`)
 mod_mesh_menu() {
     state_load_silent
@@ -531,28 +675,41 @@ mod_mesh_menu() {
         echo -e "${CYAN}====================================================================${NC}"
         echo -e " Статус: ${GREEN}$([[ "${MESH_ENABLED:-0}" == "1" ]] && echo "ВКЛ (${MESH_NODE_NAME:-?}, роль: ${MESH_ROLE:-exit}, ${MESH_WG_IP:-?})" || echo "НЕ ИНИЦИАЛИЗИРОВАН")${NC}"
         echo ""
-        echo " 1) Инициализировать эту ноду в Combain-Mesh (exit / ru_relay)"
-        echo " 2) Подключить соседнюю ноду (Join Peer + WireGuard wg-mesh0)"
-        echo " 3) Пользователи и подписки (создать, лимит устройств/дат, сброс HWID)"
-        echo " 4) Статус кластера, нод и wg-mesh0 (node-list + health)"
-        echo " 5) Принудительная синхронизация кластера сейчас (sync-now)"
-        echo " 6) Настройка каскада RU-Relay -> Exit поверх wg-mesh0"
-        echo " 7) Показать карточку этой ноды (IP, WG PubKey, Mesh IP, MESH_SECRET)"
+        echo " 1) Инициализировать эту ноду (авто-роль по GeoIP: RU -> ru_relay, иначе -> exit)"
+        echo " 2) Выдать инвайт-токен в 1 строку (для подключения нового сервера)"
+        echo " 3) Подключиться к кластеру по инвайт-токену (combain-join://...)"
+        echo " 4) Сменить роль любого узла в кластере (exit <-> ru_relay с любого сервера)"
+        echo " 5) Пользователи и подписки (создать, лимит устройств/дат, сброс HWID)"
+        echo " 6) Статус кластера, нод и wg-mesh0 (node-list + cascade-target)"
+        echo " 7) Принудительная синхронизация кластера сейчас (sync-now)"
+        echo " 8) Ручное подключение пира (Join Peer) / карточка ноды"
+        echo " 9) Настройка каскада RU-Relay -> Exit поверх wg-mesh0"
         echo " 0) Назад"
-        read -rp "Выберите действие [0-7]: " mesh_choice
+        read -rp "Выберите действие [0-9]: " mesh_choice
 
         case "$mesh_choice" in
             1) mod_mesh_init_node ;;
-            2) mod_mesh_join_peer ;;
-            3) mod_mesh_users_menu ;;
-            4) mod_mesh_show_status ;;
-            5)
+            2) mod_mesh_create_invite ;;
+            3) mod_mesh_join_by_invite ;;
+            4) mod_mesh_set_node_role ;;
+            5) mod_mesh_users_menu ;;
+            6)
+                mod_mesh_show_status
+                if _mesh_require_cli; then
+                    python3 "$(_mesh_py_bin)" cascade-target --state-dir "${STATE_DIR}" || true
+                fi
+                ;;
+            7)
                 if _mesh_require_cli; then
                     python3 "$(_mesh_py_bin)" sync-now --state-dir "${STATE_DIR}"
                 fi
                 ;;
-            6) mod_mesh_ru_relay_guide ;;
-            7) mod_mesh_show_node_card ;;
+            8)
+                mod_mesh_show_node_card
+                read -rp "Добавить пира вручную прямо сейчас? [y/N]: " ans_jp
+                [[ "${ans_jp,,}" == "y" ]] && mod_mesh_join_peer
+                ;;
+            9) mod_mesh_ru_relay_guide ;;
             0) return 0 ;;
             *) log_warn "Неверный выбор." ;;
         esac
