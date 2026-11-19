@@ -274,6 +274,7 @@ if [[ -d "/opt/AdGuardHome" && -f "\${CERT_DIR}/fullchain.pem" ]]; then
     fi
 fi
 docker start combain-nginx >/dev/null 2>&1 || true
+docker restart combain-3xui >/dev/null 2>&1 || true
 EOF
     chmod +x /etc/letsencrypt/renewal-hooks/post/combain-sync-certs.sh
     log_ok "Хуки автопродления Let's Encrypt настроены (без остановки sniproxy на 443)."

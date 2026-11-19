@@ -71,24 +71,20 @@ mod_sniproxy_sync_domains() {
         dns_rules="    # Single-domain режим: /dns-query проксируется через Nginx"
     fi
 
-    # Режим Self-Steal Reality (REALITY_SNI == BASE_DOMAIN): sniproxy направляет BASE_DOMAIN в Xray Reality (20443),
-    # а Xray Reality при проверке обычного TLS прозрачно прокидывает веб-трафик/WS/XHTTP в Nginx (127.0.0.1:8443).
-    local reality_port="${XRAY_REALITY_INTERNAL_PORT:-20443}"
+    # На 443/tcp sniproxy маршрутизирует BASE_DOMAIN напрямую в Nginx (без лишней петли через Reality),
+    # т.к. прямые VLESS-TLS (2053) и VLESS-Reality (2083) слушают свои выделенные порты напрямую в Xray.
+    # Если выбран внешний REALITY_SNI != BASE_DOMAIN, он дополнительно пробрасывается в Reality.
+    local reality_port="${XRAY_DIRECT_REALITY_PORT:-2083}"
     local nginx_port="${NGINX_INTERNAL_HTTPS_PORT:-8443}"
     local base_target_port="$nginx_port"
     local whitelist_rules=""
 
-    if [[ -n "${REALITY_SNI:-}" && "${REALITY_SNI}" == "${BASE_DOMAIN:-}" ]]; then
-        if ss -tln 2>/dev/null | grep -qE ":${reality_port}[[:space:]]"; then
-            base_target_port="$reality_port"
-        fi
-        whitelist_rules="    # Self-Steal режим: Reality работает на основном домене ${BASE_DOMAIN} -> 127.0.0.1:${base_target_port}"
-    elif [[ -n "${REALITY_SNI:-}" ]]; then
+    if [[ -n "${REALITY_SNI:-}" && "${REALITY_SNI}" != "${BASE_DOMAIN:-}" ]]; then
         local r_esc
         r_esc="$(_sniproxy_escape_regex "${REALITY_SNI}")"
         whitelist_rules="    .*${r_esc}\$ 127.0.0.1:${reality_port}"
     else
-        whitelist_rules="    # Внешний Reality SNI не задан"
+        whitelist_rules="    # Прямые VLESS-TLS (${XRAY_DIRECT_TLS_PORT:-2053}) и Self-Steal Reality (${reality_port}) работают напрямую в Xray"
     fi
 
     # Правила обхода геоблокировок (строго из активного списка + агрегированные паттерны Google/MS)

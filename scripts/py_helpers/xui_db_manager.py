@@ -578,8 +578,49 @@ def cmd_init_all(args: argparse.Namespace) -> int:
         upsert_setting(conn, "webBasePath", panel_path)
         ensure_fast_ipv4_xray_template(conn)
 
-        # 1. VLESS-Reality (127.0.0.1:20443, трафик приходит от sniproxy; Self-Steal проксирует веб на локальный Nginx)
+        # 1. Прямой VLESS + TCP + TLS (xtls-rprx-vision) на выделенном порту (2053) с честным сертификатом Let's Encrypt
+        #    и fallback на заглушку Nginx (127.0.0.1:8080) — минует sniproxy и порт 443!
+        inbound_count = 5
+        if getattr(args, "base_domain", "") and getattr(args, "direct_tls_port", 0):
+            tls_settings = build_vless_settings(args.uuid, "combain-tls", "xtls-rprx-vision")
+            tls_settings["fallbacks"] = [{"dest": "127.0.0.1:8080"}]
+            tls_stream = {
+                "network": "tcp",
+                "security": "tls",
+                "externalProxy": [],
+                "tlsSettings": {
+                    "serverName": args.base_domain,
+                    "minVersion": "1.2",
+                    "maxVersion": "1.3",
+                    "alpn": ["h2", "http/1.1"],
+                    "certificates": [
+                        {
+                            "certificateFile": f"/root/cert/live/{args.base_domain}/fullchain.pem",
+                            "keyFile": f"/root/cert/live/{args.base_domain}/privkey.pem",
+                            "ocspStapling": 3600,
+                        }
+                    ],
+                },
+                "tcpSettings": {"acceptProxyProtocol": False, "header": {"type": "none"}},
+            }
+            upsert_inbound(
+                conn,
+                tag="combain-vless-tls",
+                remark="Combain-VLESS-TLS",
+                listen="0.0.0.0",
+                port=args.direct_tls_port,
+                protocol="vless",
+                settings_obj=tls_settings,
+                stream_obj=tls_stream,
+                client_email="combain-tls",
+                client_uuid=args.uuid,
+                client_flow="xtls-rprx-vision",
+            )
+            inbound_count = 6
+
+        # 2. Прямой VLESS-Reality на выделенном порту (2083, минует sniproxy и 443; Self-Steal -> Nginx 127.0.0.1:8443)
         reality_dest = args.reality_dest.strip() if getattr(args, "reality_dest", "") else f"{args.reality_sni}:443"
+        reality_listen = getattr(args, "reality_listen", "0.0.0.0") or "0.0.0.0"
         reality_stream = {
             "network": "tcp",
             "security": "reality",
@@ -607,7 +648,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
             conn,
             tag="combain-reality",
             remark="Combain-VLESS-Reality",
-            listen="127.0.0.1",
+            listen=reality_listen,
             port=args.reality_port,
             protocol="vless",
             settings_obj=build_vless_settings(args.uuid, "combain-reality", "xtls-rprx-vision"),
@@ -682,7 +723,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
-    print(f"[OK] База 3x-ui ({args.db}) настроена: панель 127.0.0.1:{args.panel_port}/{args.panel_path.strip('/')}/ + 5 инбаундов.")
+    print(f"[OK] База 3x-ui ({args.db}) настроена: панель 127.0.0.1:{args.panel_port}/{args.panel_path.strip('/')}/ + {inbound_count} инбаундов.")
     return 0
 
 
@@ -709,14 +750,41 @@ def _collect_vless_links(
         return base_name
 
     fm_json = json.dumps(ANTI_TSPU_FINALMASK, separators=(",", ":"))
+    direct_tls_port = getattr(args, "direct_tls_port", 2053) or 2053
+    direct_reality_port = getattr(args, "direct_reality_port", 2083) or 2083
 
-    links: list[tuple[str, str]] = [
+    links: list[tuple[str, str]] = []
+
+    if args.base_domain:
+        links.append(
+            (
+                f"VLESS-TLS Vision (прямой порт {direct_tls_port}, без sniproxy)",
+                build_vless_uri(
+                    args.uuid,
+                    args.base_domain,
+                    direct_tls_port,
+                    {
+                        "encryption": "none",
+                        "type": "tcp",
+                        "security": "tls",
+                        "sni": args.base_domain,
+                        "fp": "chrome",
+                        "alpn": "h2,http/1.1",
+                        "flow": "xtls-rprx-vision",
+                        "fm": fm_json,
+                    },
+                    _tag("Combain-VLESS-TLS"),
+                ),
+            )
+        )
+
+    links.append(
         (
-            "VLESS-Reality (прямой с маскировкой + TCP-фрагментация)",
+            f"VLESS-Reality (прямой порт {direct_reality_port}, без sniproxy)",
             build_vless_uri(
                 args.uuid,
                 args.server_ip,
-                443,
+                direct_reality_port,
                 {
                     "encryption": "none",
                     "type": "tcp",
@@ -732,7 +800,7 @@ def _collect_vless_links(
                 _tag("Combain-Reality"),
             ),
         )
-    ]
+    )
 
     if args.base_domain:
         if args.ya_xhttp_path:
@@ -996,9 +1064,48 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
         return base_name
 
     fm_copy = lambda: json.loads(json.dumps(ANTI_TSPU_FINALMASK))
+    direct_tls_port = getattr(args, "direct_tls_port", 2053) or 2053
+    direct_reality_port = getattr(args, "direct_reality_port", 2083) or 2083
     docs: list[dict] = []
 
-    # 1. Combain-Reality (Self-Steal + TCP 1-1 фрагментация)
+    # 1. Combain-VLESS-TLS (прямой порт 2053, честный TLS Vision без sniproxy + TCP 1-1 фрагментация)
+    if args.base_domain:
+        docs.append(
+            _wrap_client_xray_doc(
+                _tag("Combain-VLESS-TLS"),
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": args.base_domain,
+                                "port": direct_tls_port,
+                                "users": [
+                                    {
+                                        "id": args.uuid,
+                                        "encryption": "none",
+                                        "flow": "xtls-rprx-vision",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "tcp",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": args.base_domain,
+                            "fingerprint": "chrome",
+                            "alpn": ["h2", "http/1.1"],
+                        },
+                        "finalmask": fm_copy(),
+                    },
+                },
+            )
+        )
+
+    # 2. Combain-Reality (прямой порт 2083 без sniproxy + Self-Steal + TCP 1-1 фрагментация)
     docs.append(
         _wrap_client_xray_doc(
             _tag("Combain-Reality"),
@@ -1009,7 +1116,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                     "vnext": [
                         {
                             "address": args.server_ip,
-                            "port": 443,
+                            "port": direct_reality_port,
                             "users": [
                                 {
                                     "id": args.uuid,
@@ -1180,6 +1287,8 @@ def _add_common_link_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reality-sni", required=True)
     parser.add_argument("--reality-public-key", required=True)
     parser.add_argument("--reality-short-id", required=True)
+    parser.add_argument("--direct-tls-port", type=int, default=2053)
+    parser.add_argument("--direct-reality-port", type=int, default=2083)
     parser.add_argument("--vk-cdn-domain", default="")
     parser.add_argument("--vk-xhttp-path", default="")
     parser.add_argument("--vk-ws-path", default="")
@@ -1194,17 +1303,20 @@ def main() -> int:
 
     subparsers.add_parser("gen-keys", help="Сгенерировать ключи X25519 Reality, shortId и UUID")
 
-    p_init = subparsers.add_parser("init-all", help="Настроить панель и 5 инбаундов в x-ui.db")
+    p_init = subparsers.add_parser("init-all", help="Настроить панель и инбаунды в x-ui.db")
     p_init.add_argument("--db", type=Path, default=Path("/etc/x-ui/x-ui.db"))
     p_init.add_argument("--panel-port", type=int, required=True)
     p_init.add_argument("--panel-path", required=True)
     p_init.add_argument("--uuid", required=True)
+    p_init.add_argument("--base-domain", default="")
+    p_init.add_argument("--direct-tls-port", type=int, default=2053)
     p_init.add_argument("--reality-sni", required=True)
     p_init.add_argument("--reality-dest", default="")
+    p_init.add_argument("--reality-listen", default="0.0.0.0")
     p_init.add_argument("--reality-private-key", required=True)
     p_init.add_argument("--reality-public-key", required=True)
     p_init.add_argument("--reality-short-id", required=True)
-    p_init.add_argument("--reality-port", type=int, default=20443)
+    p_init.add_argument("--reality-port", type=int, default=2083)
     p_init.add_argument("--vk-xhttp-port", type=int, default=20444)
     p_init.add_argument("--vk-xhttp-path", required=True)
     p_init.add_argument("--vk-ws-port", type=int, default=20445)

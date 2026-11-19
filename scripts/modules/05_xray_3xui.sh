@@ -133,6 +133,8 @@ mod_xray_update_subscription() {
         --reality-sni "${REALITY_SNI:-www.microsoft.com}" \
         --reality-public-key "${REALITY_PUBLIC_KEY}" \
         --reality-short-id "${REALITY_SHORT_ID:-00}" \
+        --direct-tls-port "${XRAY_DIRECT_TLS_PORT:-2053}" \
+        --direct-reality-port "${XRAY_DIRECT_REALITY_PORT:-2083}" \
         --vk-cdn-domain "${VK_CDN_DOMAIN:-}" \
         --vk-xhttp-path "${XHTTP_VK_PATH:-}" \
         --vk-ws-path "${WS_VK_PATH:-}" \
@@ -167,10 +169,15 @@ mod_xray_apply_inbounds() {
         return 1
     fi
 
-    local reality_port="${XRAY_REALITY_INTERNAL_PORT:-20443}"
+    local direct_tls_port="${XRAY_DIRECT_TLS_PORT:-2053}"
+    local reality_port="${XRAY_DIRECT_REALITY_PORT:-2083}"
     local reality_dest="${REALITY_SNI}:443"
     if [[ -n "${BASE_DOMAIN:-}" && "${REALITY_SNI}" == "${BASE_DOMAIN}" ]]; then
         reality_dest="127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT:-8443}"
+    fi
+    local tls_domain_arg=""
+    if [[ -n "${BASE_DOMAIN:-}" && -f "/etc/letsencrypt/live/${BASE_DOMAIN}/fullchain.pem" ]]; then
+        tls_domain_arg="${BASE_DOMAIN}"
     fi
 
     # Останавливаем контейнер на время безопасного патчинга БД x-ui.db
@@ -181,8 +188,11 @@ mod_xray_apply_inbounds() {
         --panel-port "${XUI_INTERNAL_PORT}" \
         --panel-path "${SECRET_PANEL_PATH}" \
         --uuid "${MAIN_CLIENT_UUID}" \
+        --base-domain "$tls_domain_arg" \
+        --direct-tls-port "$direct_tls_port" \
         --reality-sni "${REALITY_SNI}" \
         --reality-dest "$reality_dest" \
+        --reality-listen "0.0.0.0" \
         --reality-private-key "${REALITY_PRIVATE_KEY}" \
         --reality-public-key "${REALITY_PUBLIC_KEY}" \
         --reality-short-id "${REALITY_SHORT_ID}" \
