@@ -43,28 +43,52 @@ VK_GET_XHTTP_EXTRA = {
     "scMinPostsIntervalMs": "10-25",
 }
 
-# Anti-ТСПУ профиль XMUX для прямого XHTTP (удерживает все потоки YouTube/DNS в 1-2 H2-сессиях без всплесков коннектов)
+# Anti-ТСПУ профиль XMUX для прямого XHTTP (1-2 H2-сессии с периодической ротацией как у живого браузера)
 DIRECT_XHTTP_XMUX = {
     "maxConnections": "1-2",
-    "hMaxRequestTimes": "800-1200",
-    "hMaxReusableSecs": "1800-3000",
+    "cMaxLifetimeMs": "300000-600000",
+    "hMaxRequestTimes": "200-400",
+    "hMaxReusableSecs": "600-1200",
 }
 
-# Сырая TCP-сегментация первого пакета (аналог zapret multisplit), совместимая с sniproxy (не ломает TLS Record Header)
+# Реалистичные браузерные заголовки для XHTTP/WS-хэндшейка
+BROWSER_MASK_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+# Сырая TCP-сегментация первого пакета (10-25 байт — гарантированно разрезает SNI в ClientHello,
+# совместима со sniproxy и Nginx, т.к. не ломает TLS Record Header)
 ANTI_TSPU_FINALMASK = {
     "tcp": [
         {
             "type": "fragment",
             "settings": {
                 "packets": "1-1",
-                "length": "50-150",
+                "length": "10-25",
                 "delay": "5-10",
-                "lengths": ["50-150"],
+                "lengths": ["10-25"],
                 "delays": ["5-10"],
             },
         }
     ]
 }
+
+
+def build_vless_decryption(priv_key: str) -> str:
+    """Нативный VLESS Encryption (ML-KEM-768 + X25519, режим random с рандомным паддингом первых пакетов)."""
+    key = (priv_key or "").strip()
+    if not key:
+        return "none"
+    return f"mlkem768x25519plus.random.600s.{key}"
+
+
+def build_vless_encryption(pub_key: str) -> str:
+    """Клиентский параметр encryption для нативного VLESS Encryption (0-RTT + random padding)."""
+    key = (pub_key or "").strip()
+    if not key:
+        return "none"
+    return f"mlkem768x25519plus.random.0rtt.{key}"
 
 
 def _x25519_clamp(scalar_bytes: bytes) -> int:
@@ -416,7 +440,12 @@ def upsert_inbound(
                 )
 
 
-def build_vless_settings(client_uuid: str, email: str, flow: str = "") -> dict:
+def build_vless_settings(
+    client_uuid: str,
+    email: str,
+    flow: str = "",
+    decryption: str = "none",
+) -> dict:
     return {
         "clients": [
             {
@@ -432,7 +461,7 @@ def build_vless_settings(client_uuid: str, email: str, flow: str = "") -> dict:
                 "reset": 0,
             }
         ],
-        "decryption": "none",
+        "decryption": decryption or "none",
     }
 
 
@@ -667,7 +696,8 @@ def cmd_init_all(args: argparse.Namespace) -> int:
             conn.execute("DELETE FROM inbounds WHERE tag = 'combain-reality'")
             conn.execute("DELETE FROM client_traffics WHERE email = 'combain-reality'")
 
-        # 2-5. Инбаунды за Nginx для VK Cloud CDN и Yandex Cloud CDN (XHTTP + WS)
+        # 3-6. Инбаунды за Nginx на 443/tcp (XHTTP + WS) с нативным VLESS Encryption (ML-KEM-768+X25519 random padding)
+        vless_dec = build_vless_decryption(args.reality_private_key)
         cdn_defs = [
             ("combain-vk-xhttp", "VK-CDN-XHTTP", args.vk_xhttp_port, "xhttp", f"/{args.vk_xhttp_path.lstrip('/')}", "vk-xhttp"),
             ("combain-vk-ws", "VK-CDN-WS", args.vk_ws_port, "ws", f"/{args.vk_ws_path.lstrip('/')}", "vk-ws"),
@@ -700,7 +730,12 @@ def cmd_init_all(args: argparse.Namespace) -> int:
                         "network": "xhttp",
                         "security": "none",
                         "externalProxy": [],
-                        "xhttpSettings": {"path": path, "host": "", "mode": "auto"},
+                        "xhttpSettings": {
+                            "path": path,
+                            "host": "",
+                            "mode": "auto",
+                            "xPaddingBytes": "150-900",
+                        },
                     }
             else:
                 stream = {
@@ -716,7 +751,7 @@ def cmd_init_all(args: argparse.Namespace) -> int:
                 listen="127.0.0.1",
                 port=port,
                 protocol="vless",
-                settings_obj=build_vless_settings(args.uuid, email, ""),
+                settings_obj=build_vless_settings(args.uuid, email, "", decryption=vless_dec),
                 stream_obj=stream,
                 client_email=email,
                 client_uuid=args.uuid,
@@ -812,10 +847,12 @@ def _collect_vless_links(
             )
         )
 
+    vless_enc = build_vless_encryption(args.reality_public_key)
+
     if args.base_domain:
         if args.ya_xhttp_path:
             direct_params = {
-                "encryption": "none",
+                "encryption": vless_enc,
                 "type": "xhttp",
                 "security": "tls",
                 "sni": args.base_domain,
@@ -828,7 +865,7 @@ def _collect_vless_links(
             }
         else:
             direct_params = {
-                "encryption": "none",
+                "encryption": vless_enc,
                 "type": "xhttp",
                 "security": "tls",
                 "sni": args.base_domain,
@@ -859,13 +896,14 @@ def _collect_vless_links(
                         args.base_domain,
                         443,
                         {
-                            "encryption": "none",
+                            "encryption": vless_enc,
                             "type": "ws",
                             "security": "tls",
                             "sni": args.base_domain,
                             "host": args.base_domain,
                             "fp": "chrome",
                             "path": f"/{args.ya_ws_path.lstrip('/')}",
+                            "fm": fm_json,
                         },
                         _tag("Combain-Direct-WS"),
                     ),
@@ -881,7 +919,7 @@ def _collect_vless_links(
                     args.vk_cdn_domain,
                     443,
                     {
-                        "encryption": "none",
+                        "encryption": vless_enc,
                         "type": "xhttp",
                         "security": "tls",
                         "sni": args.vk_cdn_domain,
@@ -905,7 +943,7 @@ def _collect_vless_links(
                     args.ya_cdn_domain,
                     443,
                     {
-                        "encryption": "none",
+                        "encryption": vless_enc,
                         "type": "xhttp",
                         "security": "tls",
                         "sni": args.ya_cdn_domain,
@@ -925,7 +963,7 @@ def _collect_vless_links(
                     args.ya_cdn_domain,
                     443,
                     {
-                        "encryption": "none",
+                        "encryption": vless_enc,
                         "type": "ws",
                         "security": "tls",
                         "sni": args.ya_cdn_domain,
@@ -1154,7 +1192,9 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
             )
         )
 
-    # 2. Combain-Direct-XHTTP (stream-one h2 + xmux 1-2 + TCP 1-1 фрагментация)
+    vless_enc = build_vless_encryption(args.reality_public_key)
+
+    # 3. Combain-Direct-XHTTP (stream-one h2 + xPaddingBytes + браузерные заголовки + xmux ротация + VLESS Encryption + 10-25B SNI split)
     if args.base_domain and args.ya_xhttp_path:
         docs.append(
             _wrap_client_xray_doc(
@@ -1167,7 +1207,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                             {
                                 "address": args.base_domain,
                                 "port": 443,
-                                "users": [{"id": args.uuid, "encryption": "none"}],
+                                "users": [{"id": args.uuid, "encryption": vless_enc}],
                             }
                         ]
                     },
@@ -1183,6 +1223,8 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                             "path": f"/{args.ya_xhttp_path.lstrip('/')}",
                             "host": args.base_domain,
                             "mode": "stream-one",
+                            "xPaddingBytes": "150-900",
+                            "headers": dict(BROWSER_MASK_HEADERS),
                             "xmux": json.loads(json.dumps(DIRECT_XHTTP_XMUX)),
                         },
                         "finalmask": fm_copy(),
@@ -1191,7 +1233,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
             )
         )
 
-    # 3. Combain-Direct-WS (WebSocket HTTP/1.1 + TCP 1-1 фрагментация)
+    # 4. Combain-Direct-WS (WebSocket HTTP/1.1 + браузерные заголовки + VLESS Encryption + 10-25B SNI split)
     if args.base_domain and args.ya_ws_path:
         docs.append(
             _wrap_client_xray_doc(
@@ -1204,7 +1246,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                             {
                                 "address": args.base_domain,
                                 "port": 443,
-                                "users": [{"id": args.uuid, "encryption": "none"}],
+                                "users": [{"id": args.uuid, "encryption": vless_enc}],
                             }
                         ]
                     },
@@ -1219,6 +1261,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                         "wsSettings": {
                             "path": f"/{args.ya_ws_path.lstrip('/')}",
                             "host": args.base_domain,
+                            "headers": dict(BROWSER_MASK_HEADERS),
                         },
                         "finalmask": fm_copy(),
                     },
@@ -1226,7 +1269,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
             )
         )
 
-    # 4. Yandex Cloud CDN (если задан) — без TCP фрагментации на стороне клиента или с ней (CDN поддерживает TCP сегментацию)
+    # 5. Yandex Cloud CDN (если задан)
     if args.ya_cdn_domain and args.ya_ws_path:
         docs.append(
             _wrap_client_xray_doc(
@@ -1239,7 +1282,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                             {
                                 "address": args.ya_cdn_domain,
                                 "port": 443,
-                                "users": [{"id": args.uuid, "encryption": "none"}],
+                                "users": [{"id": args.uuid, "encryption": vless_enc}],
                             }
                         ]
                     },
@@ -1254,6 +1297,7 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
                         "wsSettings": {
                             "path": f"/{args.ya_ws_path.lstrip('/')}",
                             "host": args.ya_cdn_domain,
+                            "headers": dict(BROWSER_MASK_HEADERS),
                         },
                     },
                 },
