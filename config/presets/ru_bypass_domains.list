@@ -1,0 +1,108 @@
+# ==============================================================================
+# Server-Combain — Пресет доменов прямого обхода (RU / White-List Split-Tunneling)
+# Формат: по одному базовому домену на строку. Комментарии начинаются с '#'.
+# Все домены из этого списка (а также зоны .ru / .su / .рф) направляются
+# клиентом Xray напрямую (outboundTag: "direct"), минуя VPN-туннель.
+# Защищает устройства семьи и друзей от детекции VPN в Госуслугах, MAX, банках и др.
+# ==============================================================================
+
+# --- Госуслуги / Гос-сервисы ---
+gosuslugi.ru
+esia.gosuslugi.ru
+gu-st.ru
+nalog.ru
+mos.ru
+pfr.gov.ru
+sfr.gov.ru
+fssp.gov.ru
+pochta.ru
+gov.ru
+mil.ru
+kremlin.ru
+
+# --- Мессенджер MAX и экосистема VK / Mail.ru ---
+max.ru
+oneme.ru
+vk.com
+vk.me
+vk.ru
+vkvideo.ru
+vk-portal.net
+userapi.com
+mycdn.me
+mail.ru
+ok.ru
+odnoklassniki.ru
+
+# --- Банки, платёжные системы и СБП ---
+sberbank.ru
+sberbank.com
+sber.ru
+sberdevices.ru
+tbank.ru
+tinkoff.ru
+t-static.ru
+alfabank.ru
+vtb.ru
+gazprombank.ru
+raiffeisen.ru
+psbank.ru
+sovcombank.ru
+rshb.ru
+open.ru
+nspk.ru
+mirpay.ru
+yoomoney.ru
+
+# --- Маркетплейсы, Яндекс, операторы, транспорт и RU-сервисы ---
+ozon.ru
+wildberries.ru
+wb.ru
+wbbasket.ru
+yandex.ru
+ya.ru
+yastatic.net
+yandex.net
+kinopoisk.ru
+dzen.ru
+rutube.ru
+avito.ru
+2gis.ru
+rzd.ru
+aeroflot.ru
+mts.ru
+megafon.ru
+beeline.ru
+t2.ru
+tele2.ru
+rt.ru
+rostelecom.ru
+dns-shop.ru
+citilink.ru
+mvideo.ru
+eldorado.ru
+lamoda.ru
+magnit.ru
+x5.ru
+pyaterochka.ru
+lenta.com
+samokat.ru
+kuper.ru
+sbermarket.ru
+ivi.ru
+okko.tv
+wink.ru
+start.ru
+premier.one
+hh.ru
+auto.ru
+cian.ru
+domclick.ru
+litres.ru
+gismeteo.ru
+ria.ru
+tass.ru
+rbc.ru
+kommersant.ru
+lenta.ru
+rambler.ru

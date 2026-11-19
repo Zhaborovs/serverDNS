@@ -985,8 +985,196 @@ def cmd_export_links(args: argparse.Namespace) -> int:
     return 0
 
 
+# Явные CIDR-диапазоны локальных/приватных сетей (RFC1918, loopback, link-local, CGNAT, IPv6 ULA/link-local).
+# Используются вместо geoip:private, чтобы Xray 26.x не требовал наличия geoip.dat на клиентах Android/Windows.
+PRIVATE_IP_CIDRS: tuple[str, ...] = (
+    "10.0.0.0/8",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/10",
+)
+
+# Регулярное выражение для прямого обхода зон .ru / .su / .рф без зависимости от geosite.dat
+RU_BYPASS_TLD_REGEXP = r"regexp:.*\.(ru|su|xn--p1ai)$"
+
+# Встроенный резервный список RU / White-List доменов (используется, если config/presets/ru_bypass_domains.list недоступен)
+DEFAULT_RU_BYPASS_DOMAINS: tuple[str, ...] = (
+    # Госуслуги / Гос-сервисы
+    "gosuslugi.ru",
+    "esia.gosuslugi.ru",
+    "gu-st.ru",
+    "nalog.ru",
+    "mos.ru",
+    "pfr.gov.ru",
+    "sfr.gov.ru",
+    "fssp.gov.ru",
+    "pochta.ru",
+    "gov.ru",
+    "mil.ru",
+    "kremlin.ru",
+    # Мессенджер MAX и экосистема VK / Mail.ru
+    "max.ru",
+    "oneme.ru",
+    "vk.com",
+    "vk.me",
+    "vk.ru",
+    "vkvideo.ru",
+    "vk-portal.net",
+    "userapi.com",
+    "mycdn.me",
+    "mail.ru",
+    "ok.ru",
+    "odnoklassniki.ru",
+    # Банки, платёжные системы и СБП
+    "sberbank.ru",
+    "sberbank.com",
+    "sber.ru",
+    "sberdevices.ru",
+    "tbank.ru",
+    "tinkoff.ru",
+    "t-static.ru",
+    "alfabank.ru",
+    "vtb.ru",
+    "gazprombank.ru",
+    "raiffeisen.ru",
+    "psbank.ru",
+    "sovcombank.ru",
+    "rshb.ru",
+    "open.ru",
+    "nspk.ru",
+    "mirpay.ru",
+    "yoomoney.ru",
+    # Маркетплейсы, Яндекс, операторы, транспорт и RU-сервисы
+    "ozon.ru",
+    "wildberries.ru",
+    "wb.ru",
+    "wbbasket.ru",
+    "yandex.ru",
+    "ya.ru",
+    "yastatic.net",
+    "yandex.net",
+    "kinopoisk.ru",
+    "dzen.ru",
+    "rutube.ru",
+    "avito.ru",
+    "2gis.ru",
+    "rzd.ru",
+    "aeroflot.ru",
+    "mts.ru",
+    "megafon.ru",
+    "beeline.ru",
+    "t2.ru",
+    "tele2.ru",
+    "rt.ru",
+    "rostelecom.ru",
+    "dns-shop.ru",
+    "citilink.ru",
+    "mvideo.ru",
+    "eldorado.ru",
+    "lamoda.ru",
+    "magnit.ru",
+    "x5.ru",
+    "pyaterochka.ru",
+    "lenta.com",
+    "samokat.ru",
+    "kuper.ru",
+    "sbermarket.ru",
+    "ivi.ru",
+    "okko.tv",
+    "wink.ru",
+    "start.ru",
+    "premier.one",
+    "hh.ru",
+    "auto.ru",
+    "cian.ru",
+    "domclick.ru",
+    "litres.ru",
+    "gismeteo.ru",
+    "ria.ru",
+    "tass.ru",
+    "rbc.ru",
+    "kommersant.ru",
+    "lenta.ru",
+    "rambler.ru",
+)
+
+
+def load_ru_bypass_domains(preset_path: Path | str | None = None) -> list[str]:
+    """Загружает список RU / White-List доменов прямого обхода из config/presets/ru_bypass_domains.list с fallback."""
+    if preset_path is None:
+        path = Path(__file__).resolve().parents[2] / "config" / "presets" / "ru_bypass_domains.list"
+    else:
+        path = Path(preset_path)
+
+    domains: list[str] = []
+    seen: set[str] = set()
+    if path.is_file():
+        try:
+            for raw_line in path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.split("#", 1)[0].strip().lower().lstrip(".")
+                if line and line not in seen:
+                    seen.add(line)
+                    domains.append(line)
+        except OSError:
+            domains = []
+
+    if not domains:
+        for item in DEFAULT_RU_BYPASS_DOMAINS:
+            norm = item.strip().lower().lstrip(".")
+            if norm and norm not in seen:
+                seen.add(norm)
+                domains.append(norm)
+    return domains
+
+
+def build_ru_bypass_routing_rules(exclude_domains: list[str] | None = None) -> list[dict]:
+    """Строит правила split-tunneling Xray для прямого обхода LAN и RU/MAX/Госуслуги/банков без .dat файлов."""
+    excluded: list[str] = []
+    excluded_set: set[str] = set()
+    for raw in exclude_domains or []:
+        norm = (raw or "").strip().lower().lstrip(".")
+        if norm and norm not in excluded_set:
+            excluded_set.add(norm)
+            excluded.append(norm)
+
+    bypass_domains = [d for d in load_ru_bypass_domains() if d not in excluded_set]
+
+    rules: list[dict] = [
+        {
+            "type": "field",
+            "ip": list(PRIVATE_IP_CIDRS),
+            "outboundTag": "direct",
+        },
+    ]
+    if excluded:
+        rules.append(
+            {
+                "type": "field",
+                "domain": [f"domain:{d}" for d in excluded],
+                "outboundTag": "proxy",
+            }
+        )
+    rules.append(
+        {
+            "type": "field",
+            "domain": [*(f"domain:{d}" for d in bypass_domains), RU_BYPASS_TLD_REGEXP],
+            "outboundTag": "direct",
+        }
+    )
+    return rules
+
+
 def _wrap_client_xray_doc(remark: str, proxy_outbound: dict) -> dict:
     """Собирает полный клиентский JSON-конфиг Xray (формат 3x-ui /json/ для v2RayTun, v2rayNG, Happ)."""
+    sniffing_cfg = {
+        "enabled": True,
+        "destOverride": ["http", "tls", "quic", "fakedns"],
+    }
     return {
         "remarks": remark,
         "log": {"loglevel": "warning"},
@@ -1002,10 +1190,7 @@ def _wrap_client_xray_doc(remark: str, proxy_outbound: dict) -> dict:
                 "port": 10808,
                 "protocol": "socks",
                 "settings": {"auth": "noauth", "udp": True, "userLevel": 8},
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "tls", "quic", "fakedns"],
-                },
+                "sniffing": dict(sniffing_cfg),
             },
             {
                 "tag": "http",
@@ -1013,6 +1198,7 @@ def _wrap_client_xray_doc(remark: str, proxy_outbound: dict) -> dict:
                 "port": 10809,
                 "protocol": "http",
                 "settings": {"userLevel": 8},
+                "sniffing": dict(sniffing_cfg),
             },
         ],
         "outbounds": [
@@ -1024,6 +1210,7 @@ def _wrap_client_xray_doc(remark: str, proxy_outbound: dict) -> dict:
             "domainStrategy": "AsIs",
             "rules": [
                 {"type": "field", "network": "udp", "port": "443", "outboundTag": "block"},
+                *build_ru_bypass_routing_rules(),
                 {"type": "field", "network": "tcp,udp", "outboundTag": "proxy"},
             ],
         },
