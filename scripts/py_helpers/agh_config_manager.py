@@ -102,13 +102,41 @@ def collect_effective_domains(
     return combined
 
 
+DEFAULT_TELEMETRY_BLOCK_DOMAINS: tuple[str, ...] = (
+    "apptracer.ru",
+    "sdk-api.apptracer.ru",
+    "tracker-api.my.com",
+    "tracker-api.vk-portal.net",
+    "stats.vk-portal.net",
+    "vk-analytics.ru",
+    "top-fwz1.mail.ru",
+    "rs.mail.ru",
+    "report.appmetrica.yandex.net",
+    "startup.mobile.yandex.net",
+    "appmetrica.yandex.ru",
+    "mc.yandex.ru",
+    "api.ipify.org",
+    "ifconfig.me",
+    "checkip.amazonaws.com",
+)
+
+
+def _load_telemetry_block_domains() -> list[str]:
+    preset_path = Path(__file__).resolve().parents[2] / "config" / "presets" / "ru_telemetry_block.list"
+    domains = read_domain_file(preset_path)
+    return domains if domains else list(DEFAULT_TELEMETRY_BLOCK_DOMAINS)
+
+
 def build_user_rules(domains: list[str], server_ip: str) -> list[str]:
-    """Формирует блок правил DNS-подмены с блокировкой утечек AAAA и HTTPS/SVCB."""
+    """Формирует блок правил DNS-подмены + блокировку AAAA/HTTPS-утечек и RU SDK-телеметрии."""
     rules: list[str] = [BEGIN_MARKER]
     for domain in domains:
         rules.append(f"||{domain}^$dnsrewrite=NOERROR;A;{server_ip}")
         rules.append(f"||{domain}^$dnstype=AAAA")
         rules.append(f"||{domain}^$dnstype=HTTPS")
+    rules.append("! --- Блокировка RU SDK-телеметрии (MAX / VK / AppMetrica / IP-пробы) ---")
+    for t_dom in _load_telemetry_block_domains():
+        rules.append(f"||{t_dom}^")
     rules.append(END_MARKER)
     return rules
 

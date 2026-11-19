@@ -1,0 +1,28 @@
+# ==============================================================================
+# Server-Combain — Пресет блокировки RU SDK-телеметрии и IP-проб (MAX/VK/Яндекс)
+# Используется на ДВУХ уровнях:
+#   1) В Xray client routing (outboundTag: "block" ВЫШЕ правила direct)
+#   2) В AdGuard Home Smart DNS (||domain^) при выключенном VPN
+# НЕ блокирует рабочие API MAX (api.oneme.ru, max.ru), Госуслуг и банков!
+# ==============================================================================
+
+# VK / MAX / MyTracker / AppTracer (SDK телеметрии и отчетов)
+apptracer.ru
+sdk-api.apptracer.ru
+tracker-api.my.com
+tracker-api.vk-portal.net
+stats.vk-portal.net
+vk-analytics.ru
+top-fwz1.mail.ru
+rs.mail.ru
+
+# Яндекс AppMetrica / Метрика (встроена в банки, Госуслуги, маркетплейсы)
+report.appmetrica.yandex.net
+startup.mobile.yandex.net
+appmetrica.yandex.ru
+mc.yandex.ru
+
+# Внешние IP-чекеры (используются модулем HOST_REACHABILITY в MAX)
+api.ipify.org
+ifconfig.me
+checkip.amazonaws.com

@@ -1132,8 +1132,55 @@ def load_ru_bypass_domains(preset_path: Path | str | None = None) -> list[str]:
     return domains
 
 
+DEFAULT_RU_TELEMETRY_BLOCK_DOMAINS: tuple[str, ...] = (
+    "apptracer.ru",
+    "sdk-api.apptracer.ru",
+    "tracker-api.my.com",
+    "tracker-api.vk-portal.net",
+    "stats.vk-portal.net",
+    "vk-analytics.ru",
+    "top-fwz1.mail.ru",
+    "rs.mail.ru",
+    "report.appmetrica.yandex.net",
+    "startup.mobile.yandex.net",
+    "appmetrica.yandex.ru",
+    "mc.yandex.ru",
+    "api.ipify.org",
+    "ifconfig.me",
+    "checkip.amazonaws.com",
+)
+
+
+def load_ru_telemetry_block_domains(preset_path: Path | str | None = None) -> list[str]:
+    """Загружает список доменов RU SDK-телеметрии (MAX/VK/AppMetrica/IP-пробы) для блокировки ДО direct."""
+    if preset_path is None:
+        path = Path(__file__).resolve().parents[2] / "config" / "presets" / "ru_telemetry_block.list"
+    else:
+        path = Path(preset_path)
+
+    domains: list[str] = []
+    seen: set[str] = set()
+    if path.is_file():
+        try:
+            for raw_line in path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.split("#", 1)[0].strip().lower().lstrip(".")
+                if line and line not in seen:
+                    seen.add(line)
+                    domains.append(line)
+        except OSError:
+            domains = []
+
+    if not domains:
+        for item in DEFAULT_RU_TELEMETRY_BLOCK_DOMAINS:
+            norm = item.strip().lower().lstrip(".")
+            if norm and norm not in seen:
+                seen.add(norm)
+                domains.append(norm)
+    return domains
+
+
 def build_ru_bypass_routing_rules(exclude_domains: list[str] | None = None) -> list[dict]:
-    """Строит правила split-tunneling Xray для прямого обхода LAN и RU/MAX/Госуслуги/банков без .dat файлов."""
+    """Строит правила split-tunneling Xray: блок RU-телеметрии -> прямой обход LAN и RU/MAX/Госуслуги/банков без .dat файлов."""
     excluded: list[str] = []
     excluded_set: set[str] = set()
     for raw in exclude_domains or []:
@@ -1142,15 +1189,25 @@ def build_ru_bypass_routing_rules(exclude_domains: list[str] | None = None) -> l
             excluded_set.add(norm)
             excluded.append(norm)
 
+    telemetry_domains = [d for d in load_ru_telemetry_block_domains() if d not in excluded_set]
     bypass_domains = [d for d in load_ru_bypass_domains() if d not in excluded_set]
 
-    rules: list[dict] = [
+    rules: list[dict] = []
+    if telemetry_domains:
+        rules.append(
+            {
+                "type": "field",
+                "domain": [f"domain:{d}" for d in telemetry_domains],
+                "outboundTag": "block",
+            }
+        )
+    rules.append(
         {
             "type": "field",
             "ip": list(PRIVATE_IP_CIDRS),
             "outboundTag": "direct",
-        },
-    ]
+        }
+    )
     if excluded:
         rules.append(
             {

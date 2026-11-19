@@ -589,6 +589,10 @@ class MeshRequestHandler(BaseHTTPRequestHandler):
             "profile-title": f"base64:{title}",
             "profile-update-interval": "6",
             "subscription-userinfo": f"upload=0; download=0; total=0; expire={exp_sec}",
+            "announce": "base64:"
+            + base64.b64encode(
+                "Совет: исключите MAX, Госуслуги и банки в Настройки -> Приложения".encode("utf-8")
+            ).decode("ascii"),
         }
 
     # ------------------------------------------------------------------
