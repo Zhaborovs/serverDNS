@@ -25,6 +25,8 @@ server {
 server {
     listen 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT} ssl;
     http2 on;
+    http2_max_concurrent_streams 256;
+    keepalive_requests 10000;
     server_name ${BASE_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN};
     large_client_header_buffers 8 32k;
     tcp_nodelay on;

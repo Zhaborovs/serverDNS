@@ -43,9 +43,9 @@ VK_GET_XHTTP_EXTRA = {
     "scMinPostsIntervalMs": "10-25",
 }
 
-# Anti-ТСПУ профиль XMUX для прямого XHTTP (1-2 H2-сессии с периодической ротацией как у живого браузера)
+# Anti-ТСПУ профиль XMUX для прямого XHTTP (до 4-8 потоков на H2-сокет: без HoL-затыков на видео + ротация как в браузере)
 DIRECT_XHTTP_XMUX = {
-    "maxConnections": "1-2",
+    "maxConcurrency": "4-8",
     "cMaxLifetimeMs": "300000-600000",
     "hMaxRequestTimes": "200-400",
     "hMaxReusableSecs": "600-1200",
