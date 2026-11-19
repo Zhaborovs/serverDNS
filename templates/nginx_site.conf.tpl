@@ -136,6 +136,47 @@ server {
         return 404;
     }
 
+    # --- Combain-Mesh API и персональные подписки пользователей (порт 22777 по умолчанию;
+    #     используется литерал 22777, т.к. envsubst в 02_ssl_nginx.sh подставляет явный список переменных) ---
+    location = /api/v1/client/bootstrap {
+        proxy_pass http://127.0.0.1:22777;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Sub-Token $http_x_sub_token;
+        proxy_set_header X-HWID $http_x_hwid;
+        proxy_read_timeout 15s;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    }
+
+    location ^~ /u/ {
+        access_log off;
+        proxy_pass http://127.0.0.1:22777;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Sub-Token $http_x_sub_token;
+        proxy_set_header X-HWID $http_x_hwid;
+        proxy_read_timeout 15s;
+    }
+
+    location ^~ /u-json/ {
+        access_log off;
+        proxy_pass http://127.0.0.1:22777;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Sub-Token $http_x_sub_token;
+        proxy_set_header X-HWID $http_x_hwid;
+        proxy_read_timeout 15s;
+    }
+
     # --- Сервис проверки скорости NetPulse (Download / Upload / Ping) ---
     location = /speedtest/ping {
         access_log off;

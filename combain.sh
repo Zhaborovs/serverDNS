@@ -5,6 +5,7 @@
 #   combain             — открыть интерактивное меню
 #   combain info        — вывести актуальную сводку настроек и ссылок
 #   combain qr          — открыть меню показа QR-кодов подключений
+#   combain mesh        — открыть меню кластера Combain-Mesh и пользователей
 #   combain change-ip   — запустить мастер быстрой смены IP
 #   combain migrate     — запустить мастер переезда / бэкапа (Drag&Drop)
 # ==============================================================================
@@ -199,9 +200,10 @@ interactive_loop() {
         echo " 6. Сводка настроек, ссылок и доступов (подменю: DNS / Xray / AWG / TG)"
         echo " 7. Пароли и доступы (просмотр и смена логинов/паролей AdGuard и 3x-ui)"
         echo " 8. QR-коды подключений (показать QR для выбранного протокола / клиента)"
+        echo " 9. Кластер Combain-Mesh и пользователи (P2P-сеть, подписки с лимитом устройств/дат)"
         echo " 0. Выход"
         echo ""
-        read -rp "Выберите пункт [0-8]: " choice
+        read -rp "Выберите пункт [0-9]: " choice
         case "$choice" in
             1) menu_full_install ;;
             2) menu_quick_change_ip ;;
@@ -211,6 +213,7 @@ interactive_loop() {
             6) mod_dashboard_info_menu; continue ;;
             7) menu_credentials; continue ;;
             8) mod_dashboard_qr_menu; continue ;;
+            9) mod_mesh_menu; continue ;;
             0) exit 0 ;;
             *) log_warn "Некорректный пункт меню." ;;
         esac
@@ -234,6 +237,9 @@ main() {
         qr|qrcode|qrcodes)
             mod_dashboard_qr_menu
             ;;
+        mesh|cluster|users)
+            mod_mesh_menu
+            ;;
         change-ip)
             menu_quick_change_ip
             [[ -t 0 ]] && interactive_loop
@@ -246,7 +252,7 @@ main() {
             [[ -t 0 ]] && interactive_loop
             ;;
         *)
-            echo "Использование: combain [info [--all] | qr | install | change-ip | migrate]"
+            echo "Использование: combain [info [--all] | qr | mesh | install | change-ip | migrate]"
             exit 1
             ;;
     esac
