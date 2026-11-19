@@ -58,13 +58,13 @@ menu_full_install() {
     mod_xray_3xui_setup
     mod_amneziawg_setup
     mod_telegram_proxy_setup
-    mod_dashboard_show_info
+    mod_dashboard_save_summary
 }
 
 menu_quick_change_ip() {
     log_step "Запуск мастера быстрой смены IP..."
     mod_backup_quick_change_ip
-    mod_dashboard_show_info
+    mod_dashboard_save_summary
 }
 
 menu_migration_and_backup() {
@@ -196,7 +196,7 @@ interactive_loop() {
         echo " 3. Переезд / Бэкап (Drag&Drop портал на 1 час, SSH-перенос, экспорт/импорт)"
         echo " 4. Управление доменами геоблока (AdGuard Home + SNIProxy синхронно)"
         echo " 5. Управление VPN и клиентами (Xray / VK-Yandex CDN / AmneziaWG / TG Proxy)"
-        echo " 6. Показать полную сводку настроек, ссылок и паролей (combain info)"
+        echo " 6. Сводка настроек, ссылок и доступов (подменю: DNS / Xray / AWG / TG)"
         echo " 7. Пароли и доступы (просмотр и смена логинов/паролей AdGuard и 3x-ui)"
         echo " 8. QR-коды подключений (показать QR для выбранного протокола / клиента)"
         echo " 0. Выход"
@@ -208,9 +208,9 @@ interactive_loop() {
             3) menu_migration_and_backup ;;
             4) menu_geo_domains ;;
             5) menu_vpn_management ;;
-            6) mod_dashboard_show_info ;;
-            7) menu_credentials ;;
-            8) mod_dashboard_qr_menu ;;
+            6) mod_dashboard_info_menu; continue ;;
+            7) menu_credentials; continue ;;
+            8) mod_dashboard_qr_menu; continue ;;
             0) exit 0 ;;
             *) log_warn "Некорректный пункт меню." ;;
         esac
@@ -221,6 +221,7 @@ interactive_loop() {
 
 main() {
     local cmd="${1:-}"
+    local sub_arg="${2:-}"
     state_load_silent
 
     case "$cmd" in
@@ -228,22 +229,24 @@ main() {
             interactive_loop
             ;;
         info|show|status)
-            mod_dashboard_show_info
+            mod_dashboard_show_info "$sub_arg"
             ;;
         qr|qrcode|qrcodes)
             mod_dashboard_qr_menu
             ;;
         change-ip)
             menu_quick_change_ip
+            [[ -t 0 ]] && interactive_loop
             ;;
         migrate|backup)
             menu_migration_and_backup
             ;;
         install)
             menu_full_install
+            [[ -t 0 ]] && interactive_loop
             ;;
         *)
-            echo "Использование: combain [info | qr | install | change-ip | migrate]"
+            echo "Использование: combain [info [--all] | qr | install | change-ip | migrate]"
             exit 1
             ;;
     esac

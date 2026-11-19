@@ -167,7 +167,7 @@ _restore_backup_archive() {
     mod_amneziawg_setup
 
     mod_backup_quick_change_ip
-    mod_dashboard_show_info
+    mod_dashboard_save_summary
     log_ok "Миграция и восстановление полностью завершены!"
 }
 

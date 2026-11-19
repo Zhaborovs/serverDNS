@@ -43,14 +43,16 @@ _qr_show_payload() {
     print_qr_if_available "$payload"
 }
 
-mod_dashboard_show_info() {
+_dashboard_prepare_context() {
     state_load_silent
     if [[ -n "${BASE_DOMAIN:-}" && -n "${MAIN_CLIENT_UUID:-}" ]] && declare -f mod_xray_update_subscription >/dev/null 2>&1; then
         mod_xray_update_subscription >/dev/null 2>&1 || true
         state_load_silent
     fi
-    local summary_file="${STATE_DIR}/last_summary.txt"
+}
 
+_dashboard_print_section() {
+    local section="${1:-all}"
     local cur_ip="${SERVER_IP:-$(detect_server_ip)}"
     local base_dom="${BASE_DOMAIN:-НЕ_ЗАДАН}"
     local dns_dom="${DNS_DOMAIN:-$base_dom}"
@@ -62,7 +64,9 @@ mod_dashboard_show_info() {
     fi
 
     local xray_links=""
-    xray_links="$(_dashboard_export_xray_links "$cur_ip")"
+    if [[ "$section" == "all" || "$section" == "xray" ]]; then
+        xray_links="$(_dashboard_export_xray_links "$cur_ip")"
+    fi
 
     local mtg_tg="tg://proxy?server=${cur_ip}&port=${MTPROTO_PORT:-18445}&secret=${MTPROTO_SECRET:-PENDING}"
     local mtg_web="https://t.me/proxy?server=${cur_ip}&port=${MTPROTO_PORT:-18445}&secret=${MTPROTO_SECRET:-PENDING}"
@@ -74,7 +78,7 @@ mod_dashboard_show_info() {
         default_awg_vpn="$(cat "${STATE_DIR}/clients/awg_default.vpn")"
     fi
 
-    {
+    if [[ "$section" == "all" ]]; then
         echo "========================================================================"
         echo "              SERVER-COMBAIN — СВОДКА НАСТРОЕК СЕРВЕРА"
         echo "========================================================================"
@@ -82,6 +86,9 @@ mod_dashboard_show_info() {
         echo "Сайт-заглушка:      https://${base_dom}/  (NetPulse SpeedTest + Рогалик «Лапки и Руны»)"
         echo "DNS домен:          ${dns_dom}"
         echo ""
+    fi
+
+    if [[ "$section" == "all" || "$section" == "dns" ]]; then
         echo "--- [1] УМНЫЙ DNS (AdGuard Home + SNI Proxy на 443 порту) ---"
         echo "DoH URL:            https://${dns_dom}/dns-query"
         echo "DoT / DoQ (853):    tls://${dns_dom}:853  |  quic://${dns_dom}:853"
@@ -96,7 +103,10 @@ mod_dashboard_show_info() {
         echo "Команда настройки DoH в Windows 11 (PowerShell от Администратора):"
         echo "Add-DnsClientDohServerAddress -ServerAddress '${cur_ip}' -DohTemplate 'https://${dns_dom}/dns-query' -AllowFallbackToUdp \$False -AutoUpgrade \$True; Clear-DnsClientCache"
         echo ""
-        echo "--- [2] СКРЫТАЯ ПАНЕЛЬ 3x-ui И XRAY (Reality + VK/Yandex CDN) ---"
+    fi
+
+    if [[ "$section" == "all" || "$section" == "xray" ]]; then
+        echo "--- [2] СКРЫТАЯ ПАНЕЛЬ 3x-ui И XRAY (443/tcp + VLESS Encryption + CDN) ---"
         echo "URL панели 3x-ui:   https://${base_dom}/${SECRET_PANEL_PATH:-adm}/"
         echo "Логин / Пароль:     ${PANEL_USER:-admin} / ${PANEL_PASS:-не задан}"
         echo "Единая подписка:    ${sub_url}  (Base64: Happ / Hiddify / v2RayTun)"
@@ -110,6 +120,9 @@ mod_dashboard_show_info() {
         echo "  * VK Cloud CDN:     /${XHTTP_VK_PATH:-?} (XHTTP GET-only, POST и WS не нужны)"
         echo "  * Yandex Cloud CDN: /${XHTTP_YA_PATH:-?} (XHTTP) | /${WS_YA_PATH:-?} (WS)"
         echo ""
+    fi
+
+    if [[ "$section" == "all" || "$section" == "awg" ]]; then
         echo "--- [3] AmneziaWG (AWG 3.1 с обфускацией и локальным DNS) ---"
         echo "UDP порт:           ${AWG_PORT:-не задан}"
         echo "Подсеть / DNS:      ${AWG_SUBNET:-10.8.1.0/24} (DNS внутри туннеля: ${AWG_SERVER_IP:-10.8.1.1})"
@@ -118,14 +131,71 @@ mod_dashboard_show_info() {
             echo "AmneziaVPN (default): ${default_awg_vpn}"
         fi
         echo ""
+    fi
+
+    if [[ "$section" == "all" || "$section" == "tg" ]]; then
         echo "--- [4] TELEGRAM PROXY (MTProto Fake-TLS + SOCKS5) ---"
         echo "MTProto (Fake-TLS): ${mtg_web}"
         echo "MTProto (App):      ${mtg_tg}"
         echo "SOCKS5 (Звонки):    ${socks_web}"
         echo "SOCKS5 (App):       ${socks_tg}"
+    fi
+
+    if [[ "$section" == "all" ]]; then
         echo "========================================================================"
-        echo "Памятка сохранена в ${summary_file}. Сводка: combain info | QR-коды: combain qr"
-    } | tee "$summary_file"
+        echo "Памятка сохранена в ${STATE_DIR}/last_summary.txt. Меню: combain | QR-коды: combain qr"
+    fi
+}
+
+mod_dashboard_save_summary() {
+    _dashboard_prepare_context
+    local summary_file="${STATE_DIR}/last_summary.txt"
+    mkdir -p "${STATE_DIR}"
+    _dashboard_print_section "all" > "$summary_file"
+    log_ok "Сводка настроек и ссылок обновлена и сохранена в ${summary_file} (просмотр: combain -> пункт 6)."
+}
+
+mod_dashboard_info_menu() {
+    _dashboard_prepare_context
+    local summary_file="${STATE_DIR}/last_summary.txt"
+    mkdir -p "${STATE_DIR}"
+    _dashboard_print_section "all" > "$summary_file"
+
+    while true; do
+        echo ""
+        echo -e "${BOLD}--- Сводка настроек, ссылок и доступов ---${NC}"
+        echo " 1) Умный DNS (AdGuard Home: DoH / DoT / DoQ + команда Windows 11)"
+        echo " 2) Xray / 3x-ui (панель, подписки /sub и /sub-json, VLESS-ссылки, пути CDN)"
+        echo " 3) AmneziaWG (AWG 3.1: порт, подсеть, .conf и vpn:// ссылка)"
+        echo " 4) Telegram Proxy (MTProto Fake-TLS + SOCKS5)"
+        echo " 5) Показать всю сводку целиком"
+        echo " 6) QR-коды подключений (combain qr)"
+        echo " 0) Назад в главное меню"
+        read -rp "Выберите раздел [0-6]: " info_choice
+        echo ""
+        case "$info_choice" in
+            1) _dashboard_print_section "dns" ;;
+            2) _dashboard_print_section "xray" ;;
+            3) _dashboard_print_section "awg" ;;
+            4) _dashboard_print_section "tg" ;;
+            5) cat "$summary_file" ;;
+            6) mod_dashboard_qr_menu ;;
+            0) return 0 ;;
+            *) log_warn "Неверный выбор." ;;
+        esac
+    done
+}
+
+mod_dashboard_show_info() {
+    local mode="${1:-}"
+    if [[ "$mode" == "--all" || ! -t 0 ]]; then
+        _dashboard_prepare_context
+        local summary_file="${STATE_DIR}/last_summary.txt"
+        mkdir -p "${STATE_DIR}"
+        _dashboard_print_section "all" | tee "$summary_file"
+    else
+        mod_dashboard_info_menu
+    fi
 }
 
 mod_dashboard_qr_menu() {
