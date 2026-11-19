@@ -133,8 +133,8 @@ mod_xray_update_subscription() {
         --reality-sni "${REALITY_SNI:-www.microsoft.com}" \
         --reality-public-key "${REALITY_PUBLIC_KEY}" \
         --reality-short-id "${REALITY_SHORT_ID:-00}" \
-        --direct-tls-port "${XRAY_DIRECT_TLS_PORT:-2053}" \
-        --direct-reality-port "${XRAY_DIRECT_REALITY_PORT:-2083}" \
+        --direct-tls-port "${XRAY_DIRECT_TLS_PORT:-0}" \
+        --direct-reality-port "${XRAY_DIRECT_REALITY_PORT:-0}" \
         --vk-cdn-domain "${VK_CDN_DOMAIN:-}" \
         --vk-xhttp-path "${XHTTP_VK_PATH:-}" \
         --vk-ws-path "${WS_VK_PATH:-}" \
@@ -169,8 +169,8 @@ mod_xray_apply_inbounds() {
         return 1
     fi
 
-    local direct_tls_port="${XRAY_DIRECT_TLS_PORT:-2053}"
-    local reality_port="${XRAY_DIRECT_REALITY_PORT:-2083}"
+    local direct_tls_port="${XRAY_DIRECT_TLS_PORT:-0}"
+    local reality_port="${XRAY_DIRECT_REALITY_PORT:-0}"
     local reality_dest="${REALITY_SNI}:443"
     if [[ -n "${BASE_DOMAIN:-}" && "${REALITY_SNI}" == "${BASE_DOMAIN}" ]]; then
         reality_dest="127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT:-8443}"
@@ -213,9 +213,11 @@ mod_xray_apply_inbounds() {
         docker start combain-3xui >/dev/null
     fi
 
-    # Дожидаемся открытия порта Reality внутри Xray перед синхронизацией sniproxy
+    # Дожидаемся открытия локального порта XHTTP (или Reality, если включен) внутри Xray
+    local wait_port="${XRAY_YA_XHTTP_PORT:-20446}"
+    [[ "$reality_port" != "0" ]] && wait_port="$reality_port"
     for _ in $(seq 1 12); do
-        if ss -tln 2>/dev/null | grep -qE ":${reality_port}[[:space:]]"; then
+        if ss -tln 2>/dev/null | grep -qE ":${wait_port}[[:space:]]"; then
             break
         fi
         sleep 0.5

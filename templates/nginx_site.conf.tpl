@@ -22,40 +22,6 @@ server {
     }
 }
 
-# Локальный HTTP-сервер заглушки (127.0.0.1:8080) для fallback инбаунда VLESS + TLS (порт 2053)
-server {
-    listen 127.0.0.1:8080;
-    server_name _;
-
-    location = /speedtest/ping {
-        access_log off;
-        return 204;
-    }
-
-    location = /speedtest/down {
-        access_log off;
-        default_type application/octet-stream;
-        alias /usr/share/nginx/decoy/chunks/speedtest_8m.bin;
-    }
-
-    location = /speedtest/up {
-        access_log off;
-        client_max_body_size 16m;
-        return 204;
-    }
-
-    location ^~ /cats/ {
-        access_log off;
-        root /usr/share/nginx/decoy;
-    }
-
-    location / {
-        root /usr/share/nginx/decoy;
-        index index.html;
-        try_files $uri $uri/ /index.html;
-    }
-}
-
 server {
     listen 127.0.0.1:${NGINX_INTERNAL_HTTPS_PORT} ssl;
     http2 on;

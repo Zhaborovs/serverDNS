@@ -23,8 +23,8 @@ _dashboard_export_xray_links() {
         --reality-sni "${REALITY_SNI:-sun9-73.userapi.com}" \
         --reality-public-key "${REALITY_PUBLIC_KEY}" \
         --reality-short-id "${REALITY_SHORT_ID:-00}" \
-        --direct-tls-port "${XRAY_DIRECT_TLS_PORT:-2053}" \
-        --direct-reality-port "${XRAY_DIRECT_REALITY_PORT:-2083}" \
+        --direct-tls-port "${XRAY_DIRECT_TLS_PORT:-0}" \
+        --direct-reality-port "${XRAY_DIRECT_REALITY_PORT:-0}" \
         --vk-cdn-domain "${VK_CDN_DOMAIN:-}" \
         --vk-xhttp-path "${XHTTP_VK_PATH:-}" \
         --vk-ws-path "${WS_VK_PATH:-}" \
