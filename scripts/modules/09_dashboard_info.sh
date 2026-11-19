@@ -53,8 +53,10 @@ mod_dashboard_show_info() {
     local base_dom="${BASE_DOMAIN:-НЕ_ЗАДАН}"
     local dns_dom="${DNS_DOMAIN:-$base_dom}"
     local sub_url="не задана"
+    local sub_json_url="не задана"
     if [[ "$base_dom" != "НЕ_ЗАДАН" && -n "${SUB_TOKEN:-}" ]]; then
         sub_url="https://${base_dom}/sub/${SUB_TOKEN}"
+        sub_json_url="https://${base_dom}/sub-json/${SUB_TOKEN}"
     fi
 
     local xray_links=""
@@ -95,7 +97,8 @@ mod_dashboard_show_info() {
         echo "--- [2] СКРЫТАЯ ПАНЕЛЬ 3x-ui И XRAY (Reality + VK/Yandex CDN) ---"
         echo "URL панели 3x-ui:   https://${base_dom}/${SECRET_PANEL_PATH:-adm}/"
         echo "Логин / Пароль:     ${PANEL_USER:-admin} / ${PANEL_PASS:-не задан}"
-        echo "Единая подписка:    ${sub_url}  (Happ / v2rayNG / Hiddify)"
+        echo "Единая подписка:    ${sub_url}  (Base64: Happ / Hiddify / v2RayTun)"
+        echo "JSON-подписка ТСПУ: ${sub_json_url}  (Xray JSON с TCP 1-1 фрагментацией для v2RayTun / v2rayNG)"
         if [[ -n "$xray_links" ]]; then
             echo "$xray_links"
         else
@@ -142,9 +145,10 @@ mod_dashboard_qr_menu() {
             esac
         done <<< "$xray_links"
 
-        local sub_uri=""
+        local sub_uri="" sub_json_uri=""
         if [[ -n "${BASE_DOMAIN:-}" && -n "${SUB_TOKEN:-}" ]]; then
             sub_uri="https://${BASE_DOMAIN}/sub/${SUB_TOKEN}"
+            sub_json_uri="https://${BASE_DOMAIN}/sub-json/${SUB_TOKEN}"
         fi
         local mtg_web=""
         [[ -n "${MTPROTO_SECRET:-}" ]] && mtg_web="https://t.me/proxy?server=${cur_ip}&port=${MTPROTO_PORT:-18445}&secret=${MTPROTO_SECRET}"
@@ -153,7 +157,7 @@ mod_dashboard_qr_menu() {
 
         echo ""
         echo -e "${BOLD}--- QR-коды подключений (выберите нужный) ---${NC}"
-        echo " 1) Единая подписка со всеми адресами (Happ / v2RayTun / v2rayNG / Hiddify)"
+        echo " 1) Единая подписка (Base64 + JSON с анти-ТСПУ фрагментацией)"
         echo " 2) VLESS-Reality (Self-Steal / прямой с маскировкой)"
         echo " 3) VLESS-XHTTP (скоростной stream-one через домен)"
         echo " 4) VLESS-WS (резервный WebSocket через домен)"
@@ -169,7 +173,8 @@ mod_dashboard_qr_menu() {
         case "$qr_choice" in
             1)
                 if [[ -n "$sub_uri" ]]; then
-                    _qr_show_payload "QR-код Единой подписки (Happ / v2RayTun / v2rayNG)" "$sub_uri"
+                    _qr_show_payload "QR-код Единой подписки (Base64 URI)" "$sub_uri"
+                    _qr_show_payload "QR-код JSON-подписки с анти-ТСПУ фрагментацией (v2RayTun / v2rayNG)" "$sub_json_uri"
                 else
                     log_warn "Единая подписка еще не сформирована (проверьте BASE_DOMAIN и модуль 05)."
                     shown="false"

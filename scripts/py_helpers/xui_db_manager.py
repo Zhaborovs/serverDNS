@@ -44,13 +44,26 @@ VK_GET_XHTTP_EXTRA = {
 }
 
 # Anti-ТСПУ профиль XMUX для прямого XHTTP (удерживает все потоки YouTube/DNS в 1-2 H2-сессиях без всплесков коннектов)
-DIRECT_XHTTP_EXTRA = {
-    "xmux": {
-        "maxConnections": "1-2",
-        "cMaxReuseTimes": 0,
-        "hMaxRequestTimes": "800-1200",
-        "hMaxReusableSecs": "1800-3000",
-    }
+DIRECT_XHTTP_XMUX = {
+    "maxConnections": "1-2",
+    "hMaxRequestTimes": "800-1200",
+    "hMaxReusableSecs": "1800-3000",
+}
+
+# Сырая TCP-сегментация первого пакета (аналог zapret multisplit), совместимая с sniproxy (не ломает TLS Record Header)
+ANTI_TSPU_FINALMASK = {
+    "tcp": [
+        {
+            "type": "fragment",
+            "settings": {
+                "packets": "1-1",
+                "length": "50-150",
+                "delay": "5-10",
+                "lengths": ["50-150"],
+                "delays": ["5-10"],
+            },
+        }
+    ]
 }
 
 
@@ -695,9 +708,11 @@ def _collect_vless_links(
             return f"{base_name} [{args.base_domain}]"
         return base_name
 
+    fm_json = json.dumps(ANTI_TSPU_FINALMASK, separators=(",", ":"))
+
     links: list[tuple[str, str]] = [
         (
-            "VLESS-Reality (прямой с маскировкой)",
+            "VLESS-Reality (прямой с маскировкой + TCP-фрагментация)",
             build_vless_uri(
                 args.uuid,
                 args.server_ip,
@@ -712,6 +727,7 @@ def _collect_vless_links(
                     "sid": args.reality_short_id,
                     "spx": "/",
                     "flow": "xtls-rprx-vision",
+                    "fm": fm_json,
                 },
                 _tag("Combain-Reality"),
             ),
@@ -730,7 +746,7 @@ def _collect_vless_links(
                 "alpn": "h2",
                 "path": f"/{args.ya_xhttp_path.lstrip('/')}",
                 "mode": "stream-one",
-                "extra": json.dumps(DIRECT_XHTTP_EXTRA, separators=(",", ":")),
+                "fm": fm_json,
             }
         else:
             direct_params = {
@@ -853,8 +869,292 @@ def cmd_export_links(args: argparse.Namespace) -> int:
     return 0
 
 
+def _wrap_client_xray_doc(remark: str, proxy_outbound: dict) -> dict:
+    """Собирает полный клиентский JSON-конфиг Xray (формат 3x-ui /json/ для v2RayTun, v2rayNG, Happ)."""
+    return {
+        "remarks": remark,
+        "log": {"loglevel": "warning"},
+        "dns": {
+            "tag": "dns_out",
+            "queryStrategy": "UseIPv4",
+            "servers": ["1.1.1.1", "8.8.8.8"],
+        },
+        "inbounds": [
+            {
+                "tag": "mixed",
+                "listen": "127.0.0.1",
+                "port": 10808,
+                "protocol": "socks",
+                "settings": {"auth": "noauth", "udp": True, "userLevel": 8},
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": ["http", "tls", "quic", "fakedns"],
+                },
+            },
+            {
+                "tag": "http",
+                "listen": "127.0.0.1",
+                "port": 10809,
+                "protocol": "http",
+                "settings": {"userLevel": 8},
+            },
+        ],
+        "outbounds": [
+            proxy_outbound,
+            {"tag": "direct", "protocol": "freedom", "settings": {}},
+            {"tag": "block", "protocol": "blackhole", "settings": {}},
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {"type": "field", "network": "udp", "port": "443", "outboundTag": "block"},
+                {"type": "field", "network": "tcp,udp", "outboundTag": "proxy"},
+            ],
+        },
+    }
+
+
+def _parse_external_vless_to_doc(uri: str) -> dict | None:
+    """Конвертирует внешнюю vless:// ссылку (из extra_sub_links.list) в клиентский JSON с анти-ТСПУ finalmask."""
+    if not uri.startswith("vless://"):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(uri)
+        if not parsed.username or not parsed.hostname:
+            return None
+        port = parsed.port or 443
+        qs = dict(urllib.parse.parse_qsl(parsed.query))
+        remark = urllib.parse.unquote(parsed.fragment) or f"Node {parsed.hostname}"
+        net = qs.get("type", "tcp")
+        sec = qs.get("security", "none")
+        flow = qs.get("flow", "")
+        user_obj: dict[str, object] = {
+            "id": parsed.username,
+            "encryption": qs.get("encryption", "none"),
+        }
+        if flow:
+            user_obj["flow"] = flow
+
+        stream: dict[str, object] = {
+            "network": net,
+            "security": sec,
+            "finalmask": json.loads(json.dumps(ANTI_TSPU_FINALMASK)),
+        }
+        if sec == "reality":
+            stream["realitySettings"] = {
+                "serverName": qs.get("sni", ""),
+                "fingerprint": qs.get("fp", "chrome"),
+                "publicKey": qs.get("pbk", ""),
+                "shortId": qs.get("sid", ""),
+                "spiderX": qs.get("spx", "/"),
+            }
+        elif sec == "tls":
+            tls_s: dict[str, object] = {
+                "serverName": qs.get("sni", parsed.hostname),
+                "fingerprint": qs.get("fp", "chrome"),
+            }
+            if qs.get("alpn"):
+                tls_s["alpn"] = [x.strip() for x in qs["alpn"].split(",") if x.strip()]
+            stream["tlsSettings"] = tls_s
+
+        if net == "ws":
+            stream["wsSettings"] = {
+                "path": qs.get("path", "/"),
+                "host": qs.get("host", qs.get("sni", parsed.hostname)),
+            }
+        elif net == "xhttp":
+            xh: dict[str, object] = {
+                "path": qs.get("path", "/"),
+                "host": qs.get("host", qs.get("sni", parsed.hostname)),
+                "mode": qs.get("mode", "auto"),
+            }
+            if qs.get("extra"):
+                try:
+                    ext_extra = json.loads(qs["extra"])
+                    if isinstance(ext_extra, dict):
+                        xh.update(ext_extra)
+                except Exception:
+                    pass
+            stream["xhttpSettings"] = xh
+
+        ob = {
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {"vnext": [{"address": parsed.hostname, "port": port, "users": [user_obj]}]},
+            "streamSettings": stream,
+        }
+        return _wrap_client_xray_doc(remark, ob)
+    except Exception:
+        return None
+
+
+def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
+    """Строит массив клиентских JSON-конфигов Xray со встроенной TCP 1-1 фрагментацией (аналог zapret)."""
+    def _tag(base_name: str) -> str:
+        if args.base_domain:
+            return f"{base_name} [{args.base_domain}]"
+        return base_name
+
+    fm_copy = lambda: json.loads(json.dumps(ANTI_TSPU_FINALMASK))
+    docs: list[dict] = []
+
+    # 1. Combain-Reality (Self-Steal + TCP 1-1 фрагментация)
+    docs.append(
+        _wrap_client_xray_doc(
+            _tag("Combain-Reality"),
+            {
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [
+                        {
+                            "address": args.server_ip,
+                            "port": 443,
+                            "users": [
+                                {
+                                    "id": args.uuid,
+                                    "encryption": "none",
+                                    "flow": "xtls-rprx-vision",
+                                }
+                            ],
+                        }
+                    ]
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "serverName": args.reality_sni,
+                        "fingerprint": "chrome",
+                        "publicKey": args.reality_public_key,
+                        "shortId": args.reality_short_id,
+                        "spiderX": "/",
+                    },
+                    "finalmask": fm_copy(),
+                },
+            },
+        )
+    )
+
+    # 2. Combain-Direct-XHTTP (stream-one h2 + xmux 1-2 + TCP 1-1 фрагментация)
+    if args.base_domain and args.ya_xhttp_path:
+        docs.append(
+            _wrap_client_xray_doc(
+                _tag("Combain-Direct-XHTTP"),
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": args.base_domain,
+                                "port": 443,
+                                "users": [{"id": args.uuid, "encryption": "none"}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "xhttp",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": args.base_domain,
+                            "fingerprint": "chrome",
+                            "alpn": ["h2"],
+                        },
+                        "xhttpSettings": {
+                            "path": f"/{args.ya_xhttp_path.lstrip('/')}",
+                            "host": args.base_domain,
+                            "mode": "stream-one",
+                            "xmux": json.loads(json.dumps(DIRECT_XHTTP_XMUX)),
+                        },
+                        "finalmask": fm_copy(),
+                    },
+                },
+            )
+        )
+
+    # 3. Combain-Direct-WS (WebSocket HTTP/1.1 + TCP 1-1 фрагментация)
+    if args.base_domain and args.ya_ws_path:
+        docs.append(
+            _wrap_client_xray_doc(
+                _tag("Combain-Direct-WS"),
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": args.base_domain,
+                                "port": 443,
+                                "users": [{"id": args.uuid, "encryption": "none"}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "ws",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": args.base_domain,
+                            "fingerprint": "chrome",
+                            "alpn": ["http/1.1"],
+                        },
+                        "wsSettings": {
+                            "path": f"/{args.ya_ws_path.lstrip('/')}",
+                            "host": args.base_domain,
+                        },
+                        "finalmask": fm_copy(),
+                    },
+                },
+            )
+        )
+
+    # 4. Yandex Cloud CDN (если задан) — без TCP фрагментации на стороне клиента или с ней (CDN поддерживает TCP сегментацию)
+    if args.ya_cdn_domain and args.ya_ws_path:
+        docs.append(
+            _wrap_client_xray_doc(
+                _tag("Yandex-CDN-WS"),
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": args.ya_cdn_domain,
+                                "port": 443,
+                                "users": [{"id": args.uuid, "encryption": "none"}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "ws",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": args.ya_cdn_domain,
+                            "fingerprint": "chrome",
+                            "alpn": ["http/1.1"],
+                        },
+                        "wsSettings": {
+                            "path": f"/{args.ya_ws_path.lstrip('/')}",
+                            "host": args.ya_cdn_domain,
+                        },
+                    },
+                },
+            )
+        )
+
+    if args.extra_links_file and args.extra_links_file.is_file():
+        for raw_line in args.extra_links_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line and not line.startswith("#"):
+                ext_doc = _parse_external_vless_to_doc(line)
+                if ext_doc:
+                    docs.append(ext_doc)
+
+    return docs
+
+
 def cmd_export_sub(args: argparse.Namespace) -> int:
-    """Генерирует Base64-полезную нагрузку единой подписки (с внешними нодами при наличии)."""
+    """Генерирует Base64 и JSON полезную нагрузку единой подписки (с внешними нодами при наличии)."""
     uris = [uri for _, uri in _collect_vless_links(args, append_domain_label=True)]
     if args.extra_links_file and args.extra_links_file.is_file():
         for raw_line in args.extra_links_file.read_text(encoding="utf-8").splitlines():
@@ -865,6 +1165,11 @@ def cmd_export_sub(args: argparse.Namespace) -> int:
     payload_b64 = base64.b64encode("\n".join(uris).encode("utf-8")).decode("ascii")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(payload_b64, encoding="utf-8")
+
+    if getattr(args, "json_out", None):
+        json_docs = _build_xray_json_configs(args)
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        args.json_out.write_text(json.dumps(json_docs, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0
 
 
@@ -912,10 +1217,11 @@ def main() -> int:
     p_links = subparsers.add_parser("export-links", help="Сформировать vless:// ссылки")
     _add_common_link_args(p_links)
 
-    p_sub = subparsers.add_parser("export-sub", help="Сформировать Base64 файл подписки")
+    p_sub = subparsers.add_parser("export-sub", help="Сформировать Base64 и JSON файлы подписки")
     _add_common_link_args(p_sub)
     p_sub.add_argument("--extra-links-file", type=Path, default=None)
     p_sub.add_argument("--out", type=Path, required=True)
+    p_sub.add_argument("--json-out", type=Path, default=None)
 
     args = parser.parse_args()
     handlers = {

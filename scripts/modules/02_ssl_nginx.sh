@@ -38,6 +38,7 @@ _render_nginx_conf() {
     SUB_TITLE_B64="$(printf 'Combain %s' "${BASE_DOMAIN:-VPN}" | base64 | tr -d '\r\n')"
     export SUB_TITLE_B64
     [[ -f "${nginx_dir}/conf.d/sub_payload.b64" ]] || printf '' > "${nginx_dir}/conf.d/sub_payload.b64"
+    [[ -f "${nginx_dir}/conf.d/sub_payload.json" ]] || printf '[]' > "${nginx_dir}/conf.d/sub_payload.json"
 
     local vars='${BASE_DOMAIN} ${DNS_DOMAIN} ${VK_CDN_DOMAIN} ${YA_CDN_DOMAIN} ${NGINX_INTERNAL_HTTPS_PORT} ${AGH_INTERNAL_HTTPS_PORT} ${SECRET_PANEL_PATH} ${XUI_INTERNAL_PORT} ${XHTTP_VK_PATH} ${XRAY_VK_XHTTP_PORT} ${WS_VK_PATH} ${XRAY_VK_WS_PORT} ${XHTTP_YA_PATH} ${XRAY_YA_XHTTP_PORT} ${WS_YA_PATH} ${XRAY_YA_WS_PORT} ${BACKUP_DROP_PATH} ${BACKUP_DROP_INTERNAL_PORT} ${SUB_TOKEN} ${SUB_TITLE_B64}'
     envsubst "$vars" < "$tpl" > "$dst"

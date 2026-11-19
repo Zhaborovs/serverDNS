@@ -103,7 +103,7 @@ server {
         proxy_set_header Host $host;
     }
 
-    # --- Единая подписка для VPN-приложений (Happ / v2rayNG / Hiddify / v2rayN) ---
+    # --- Единая подписка для VPN-приложений (Base64 URI + нативный Xray JSON с анти-ТСПУ фрагментацией) ---
     location = /sub/${SUB_TOKEN} {
         access_log off;
         default_type "text/plain; charset=utf-8";
@@ -114,7 +114,22 @@ server {
         add_header Cache-Control "no-store, no-cache, must-revalidate" always;
     }
 
+    location = /sub-json/${SUB_TOKEN} {
+        access_log off;
+        default_type "application/json; charset=utf-8";
+        alias /etc/nginx/conf.d/sub_payload.json;
+        add_header Profile-Title "base64:${SUB_TITLE_B64}" always;
+        add_header Profile-Update-Interval "6" always;
+        add_header Subscription-Userinfo "upload=0; download=0; total=0; expire=0" always;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    }
+
     location ^~ /sub/ {
+        access_log off;
+        return 404;
+    }
+
+    location ^~ /sub-json/ {
         access_log off;
         return 404;
     }

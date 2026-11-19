@@ -122,6 +122,7 @@ mod_xray_update_subscription() {
 
     local cur_ip="${SERVER_IP:-$(detect_server_ip)}"
     local sub_file="${STATE_DIR}/nginx/conf.d/sub_payload.b64"
+    local sub_json_file="${STATE_DIR}/nginx/conf.d/sub_payload.json"
     local extra_file="${STATE_DIR}/extra_sub_links.list"
     mkdir -p "${STATE_DIR}/nginx/conf.d"
 
@@ -139,7 +140,8 @@ mod_xray_update_subscription() {
         --ya-xhttp-path "${XHTTP_YA_PATH:-}" \
         --ya-ws-path "${WS_YA_PATH:-}" \
         --extra-links-file "$extra_file" \
-        --out "$sub_file"
+        --out "$sub_file" \
+        --json-out "$sub_json_file"
 }
 
 _xray_ensure_keys() {
