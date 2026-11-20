@@ -201,9 +201,10 @@ interactive_loop() {
         echo " 7. Пароли и доступы (просмотр и смена логинов/паролей AdGuard и 3x-ui)"
         echo " 8. QR-коды подключений (показать QR для выбранного протокола / клиента)"
         echo " 9. Кластер Combain-Mesh и пользователи (P2P-сеть, подписки с лимитом устройств/дат)"
+        echo " 10. Сервис и автообновление стека (обновление этого сервера / всего кластера)"
         echo " 0. Выход"
         echo ""
-        read -rp "Выберите пункт [0-9]: " choice
+        read -rp "Выберите пункт [0-10]: " choice
         case "$choice" in
             1) menu_full_install ;;
             2) menu_quick_change_ip ;;
@@ -214,6 +215,7 @@ interactive_loop() {
             7) menu_credentials; continue ;;
             8) mod_dashboard_qr_menu; continue ;;
             9) mod_mesh_menu; continue ;;
+            10) mod_service_menu; continue ;;
             0) exit 0 ;;
             *) log_warn "Некорректный пункт меню." ;;
         esac
@@ -240,6 +242,16 @@ main() {
         mesh|cluster|users)
             mod_mesh_menu
             ;;
+        service)
+            mod_service_menu
+            ;;
+        update)
+            if [[ "$sub_arg" == "--cluster" ]]; then
+                mod_service_update_cluster
+            else
+                mod_service_update_local
+            fi
+            ;;
         change-ip)
             menu_quick_change_ip
             [[ -t 0 ]] && interactive_loop
@@ -252,7 +264,7 @@ main() {
             [[ -t 0 ]] && interactive_loop
             ;;
         *)
-            echo "Использование: combain [info [--all] | qr | mesh | install | change-ip | migrate]"
+            echo "Использование: combain [info [--all] | qr | mesh | service | update [--cluster] | install | change-ip | migrate]"
             exit 1
             ;;
     esac

@@ -764,6 +764,29 @@ class MeshRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/mesh/update":
+            if not self._verify_peer_hmac("POST", path, body):
+                self._send_json(401, {"error": "unauthorized"})
+                return
+            import shutil
+            import subprocess
+
+            combain_bin = shutil.which("combain") or "/usr/local/bin/combain"
+            if not os.path.exists(combain_bin):
+                self._send_json(200, {"ok": False, "node_id": self.server.local_node_id, "error": "combain_not_found"})
+                return
+            try:
+                subprocess.Popen(
+                    [combain_bin, "update"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                self._send_json(200, {"ok": True, "node_id": self.server.local_node_id, "started": True})
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "node_id": self.server.local_node_id, "error": str(exc)})
+            return
+
         self._send_json(404, {"error": "not_found"})
 
 

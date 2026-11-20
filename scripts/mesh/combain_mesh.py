@@ -348,6 +348,49 @@ def cmd_cascade_target(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cluster_update(args: argparse.Namespace) -> int:
+    """Trigger HMAC-signed POST /mesh/update on every online peer in the cluster."""
+    db_path = _resolve_db_path(args)
+    with MeshDB(db_path) as db:
+        local_node_id = db.get_meta("local_node_id", "")
+        secret = _resolve_secret(args, db)
+        if not secret or not local_node_id:
+            print("[ERR] Node not initialized or MESH_SECRET missing.", file=sys.stderr)
+            return 2
+        engine = MeshSyncEngine(
+            db,
+            local_node_id,
+            secret,
+            api_port=_resolve_port(args, db),
+            request_timeout_sec=5.0,
+        )
+        peers = [
+            n
+            for n in db.list_nodes(include_deleted=False)
+            if n["node_id"] != local_node_id and n.get("mesh_ip")
+        ]
+        if not peers:
+            print("[INFO] Других нод в кластере пока нет (обновлена только локальная нода).")
+            return 0
+        results: dict[str, Any] = {}
+        for peer in peers:
+            name = peer.get("name") or peer["node_id"]
+            base_url = engine.resolve_peer_url(peer)
+            try:
+                resp = engine._signed_request(base_url, "POST", "/mesh/update", {"sender_node_id": local_node_id})
+                results[name] = resp
+                if not getattr(args, "json", False):
+                    st = "OK (обновление запущено)" if resp.get("ok") else f"WARN ({resp.get('error')})"
+                    print(f"  - {name} ({peer.get('mesh_ip')}): {st}")
+            except Exception as exc:
+                results[name] = {"ok": False, "error": str(exc)}
+                if not getattr(args, "json", False):
+                    print(f"  - {name} ({peer.get('mesh_ip')}): OFFLINE/ERR ({exc})")
+        if getattr(args, "json", False):
+            print(json.dumps(results, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_daemon(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args)
     db = MeshDB(db_path)
@@ -651,6 +694,9 @@ def build_parser() -> argparse.ArgumentParser:
     # cascade-target
     sub.add_parser("cascade-target", parents=[common], help="Show active healthy exit node for RU relay cascade")
 
+    # cluster-update
+    sub.add_parser("cluster-update", parents=[common], help="Trigger HMAC-signed stack update on all online peers")
+
     # daemon
     p_daemon = sub.add_parser("daemon", parents=[common], help="Run P2P sync & HTTP API daemon")
     p_daemon.add_argument("--node-id", default="", help="Override local_node_id")
@@ -729,6 +775,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_node_set_role(args)
     if cmd == "cascade-target":
         return cmd_cascade_target(args)
+    if cmd == "cluster-update":
+        return cmd_cluster_update(args)
     if cmd == "daemon":
         return cmd_daemon(args)
     if cmd == "user-add":
