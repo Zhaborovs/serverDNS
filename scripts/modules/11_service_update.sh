@@ -155,6 +155,28 @@ mod_service_health_status() {
     echo -e "${CYAN}====================================================================${NC}"
 }
 
+mod_service_set_country() {
+    state_load_silent
+    echo ""
+    echo -e "Текущий код страны (флаг в подписке): ${GREEN}${SERVER_COUNTRY:-не задан}${NC}"
+    echo "Примеры: US (🇺🇸 США), DE (🇩🇪 Германия), NL (🇳🇱 Нидерланды), FI (🇫🇮 Финляндия), RU (🇷🇺 Россия), SE (🇸🇪), GB (🇬🇧)"
+    local new_cc
+    read -rp "Введите 2-буквенный ISO-код страны [US]: " new_cc
+    new_cc="$(echo "${new_cc:-US}" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')"
+    if [[ ! "$new_cc" =~ ^[A-Z]{2}$ ]]; then
+        log_warn "Некорректный код страны (нужны ровно 2 латинские буквы, например US или DE)."
+        return 1
+    fi
+    state_set "SERVER_COUNTRY" "$new_cc"
+    if declare -f mod_xray_update_subscription >/dev/null 2>&1; then
+        mod_xray_update_subscription || true
+    fi
+    if declare -f mod_dashboard_save_summary >/dev/null 2>&1; then
+        mod_dashboard_save_summary
+    fi
+    log_ok "Страна сервера обновлена на '${new_cc}'. Подписки /sub/ и /sub-json/ пересобраны!"
+}
+
 mod_service_menu() {
     while true; do
         state_load_silent
@@ -166,14 +188,16 @@ mod_service_menu() {
         echo " 2) Синхронно обновить ВЕСЬ кластер Combain-Mesh (этот сервер + все онлайн-ноды)"
         echo " 3) Обновить Docker-образы (Nginx, 3x-ui, MTProto, SOCKS5)"
         echo " 4) Статус всех служб, контейнеров и портов"
+        echo " 5) Сменить страну / флаг сервера в подписке (текущая: ${SERVER_COUNTRY:-авто})"
         echo " 0) Назад в главное меню"
-        read -rp "Выберите действие [0-4]: " svc_choice
+        read -rp "Выберите действие [0-5]: " svc_choice
 
         case "$svc_choice" in
             1) mod_service_update_local ;;
             2) mod_service_update_cluster ;;
             3) mod_service_update_docker ;;
             4) mod_service_health_status ;;
+            5) mod_service_set_country ;;
             0) return 0 ;;
             *) log_warn "Неверный выбор." ;;
         esac
