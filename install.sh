@@ -93,7 +93,8 @@ deploy_project_files() {
     find "${PROJECT_DIR}/scripts/py_helpers" -type f -name "*.py" -exec chmod +x {} +
 
     ln -sf "${PROJECT_DIR}/combain.sh" "$BIN_LINK"
-    log_ok "Команда 'combain' зарегистрирована в ${BIN_LINK}."
+    ln -sf "${PROJECT_DIR}/combain.sh" "/usr/local/bin/comb"
+    log_ok "Команды 'combain' и 'comb' зарегистрированы в /usr/local/bin/."
 }
 
 main() {

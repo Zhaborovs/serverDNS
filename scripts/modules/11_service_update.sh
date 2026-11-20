@@ -16,6 +16,8 @@ mod_service_update_local() {
             chmod +x "${PROJECT_ROOT}/combain.sh" "${PROJECT_ROOT}/install.sh" 2>/dev/null || true
             find "${PROJECT_ROOT}/scripts" -type f -name "*.sh" -exec chmod +x {} + 2>/dev/null || true
             find "${PROJECT_ROOT}/scripts" -type f -name "*.py" -exec chmod +x {} + 2>/dev/null || true
+            ln -sf "${PROJECT_ROOT}/combain.sh" /usr/local/bin/combain 2>/dev/null || true
+            ln -sf "${PROJECT_ROOT}/combain.sh" /usr/local/bin/comb 2>/dev/null || true
             log_ok "Репозиторий обновлен до $(git -C "${PROJECT_ROOT}" rev-parse --short HEAD 2>/dev/null || echo 'latest')."
         else
             log_warn "git pull --ff-only не выполнен (возможно есть локальные правки). Продолжаю переприменение текущего кода."
