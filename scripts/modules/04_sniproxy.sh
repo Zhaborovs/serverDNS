@@ -117,7 +117,9 @@ mod_sniproxy_sync_domains() {
     fi
     local ipv6_listener_block=""
     if [[ -n "$srv_ipv6" ]]; then
-        ipv6_listener_block=$'\n'"listener [::]:443 {"$'\n'"    proto tls"$'\n'"    table combain_sni"$'\n'"}"
+        # Привязываем конкретный глобальный IPv6 (не wildcard [::]:443), чтобы избежать конфликта
+        # "bind [::]:443 failed: Address already in use" с 0.0.0.0:443 при net.ipv6.bindv6only=0
+        ipv6_listener_block=$'\n'"listener [${srv_ipv6}]:443 {"$'\n'"    proto tls"$'\n'"    table combain_sni"$'\n'"}"
         # Разрешаем 443/tcp и ICMPv6 в ip6tables (без сброса существующих правил)
         if command -v ip6tables >/dev/null 2>&1; then
             ip6tables -C INPUT -p ipv6-icmp -j ACCEPT 2>/dev/null || ip6tables -I INPUT 1 -p ipv6-icmp -j ACCEPT 2>/dev/null || true
