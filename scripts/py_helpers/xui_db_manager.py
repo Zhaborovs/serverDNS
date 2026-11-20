@@ -771,6 +771,14 @@ def cmd_init_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def country_to_flag(country_code: str) -> str:
+    """Конвертирует 2-буквенный ISO-код страны (US, DE, NL, RU...) в эмодзи флага (🇺🇸, 🇩🇪, 🇳🇱, 🇷🇺)."""
+    cc = (country_code or "").strip().upper()
+    if len(cc) == 2 and cc.isascii() and cc.isalpha():
+        return chr(0x1F1E6 + ord(cc[0]) - ord("A")) + chr(0x1F1E6 + ord(cc[1]) - ord("A"))
+    return "🌐"
+
+
 def build_vless_uri(
     client_uuid: str,
     address: str,
@@ -778,9 +786,12 @@ def build_vless_uri(
     params: dict[str, str],
     name: str,
 ) -> str:
+    host = address.strip()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     qs = urllib.parse.urlencode(params, safe="")
     frag = urllib.parse.quote(name, safe="")
-    return f"vless://{client_uuid}@{address}:{port}?{qs}#{frag}"
+    return f"vless://{client_uuid}@{host}:{port}?{qs}#{frag}"
 
 
 def _collect_vless_links(
@@ -788,10 +799,13 @@ def _collect_vless_links(
     append_domain_label: bool = False,
 ) -> list[tuple[str, str]]:
     """Формирует список (описание, vless:// URI) для локальной и CDN-подписок."""
+    flag = country_to_flag(getattr(args, "country", ""))
+
     def _tag(base_name: str) -> str:
+        prefix = f"{flag} {base_name}" if append_domain_label else base_name
         if append_domain_label and args.base_domain:
-            return f"{base_name} [{args.base_domain}]"
-        return base_name
+            return f"{prefix} [{args.base_domain}]"
+        return prefix
 
     fm_json = json.dumps(ANTI_TSPU_FINALMASK, separators=(",", ":"))
     direct_tls_port = int(getattr(args, "direct_tls_port", 0) or 0)
@@ -906,6 +920,53 @@ def _collect_vless_links(
                             "fm": fm_json,
                         },
                         _tag("Combain-Direct-WS"),
+                    ),
+                )
+            )
+        srv_ipv6 = (getattr(args, "server_ipv6", "") or "").strip()
+        if srv_ipv6 and args.ya_xhttp_path:
+            links.append(
+                (
+                    "VLESS-XHTTP-IPv6 (альтернативный маршрут по IPv6)",
+                    build_vless_uri(
+                        args.uuid,
+                        srv_ipv6,
+                        443,
+                        {
+                            "encryption": vless_enc,
+                            "type": "xhttp",
+                            "security": "tls",
+                            "sni": args.base_domain,
+                            "host": args.base_domain,
+                            "fp": "chrome",
+                            "alpn": "h2",
+                            "path": f"/{args.ya_xhttp_path.lstrip('/')}",
+                            "mode": "stream-one",
+                            "fm": fm_json,
+                        },
+                        _tag("Combain-Direct-XHTTP-IPv6"),
+                    ),
+                )
+            )
+        if srv_ipv6 and args.ya_ws_path:
+            links.append(
+                (
+                    "VLESS-WS-IPv6 (резервный WebSocket по IPv6)",
+                    build_vless_uri(
+                        args.uuid,
+                        srv_ipv6,
+                        443,
+                        {
+                            "encryption": vless_enc,
+                            "type": "ws",
+                            "security": "tls",
+                            "sni": args.base_domain,
+                            "host": args.base_domain,
+                            "fp": "chrome",
+                            "path": f"/{args.ya_ws_path.lstrip('/')}",
+                            "fm": fm_json,
+                        },
+                        _tag("Combain-Direct-WS-IPv6"),
                     ),
                 )
             )
@@ -1350,10 +1411,12 @@ def _parse_external_vless_to_doc(uri: str) -> dict | None:
 
 def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
     """Строит массив клиентских JSON-конфигов Xray со встроенной TCP 1-1 фрагментацией (аналог zapret)."""
+    flag = country_to_flag(getattr(args, "country", ""))
+
     def _tag(base_name: str) -> str:
         if args.base_domain:
-            return f"{base_name} [{args.base_domain}]"
-        return base_name
+            return f"{flag} {base_name} [{args.base_domain}]"
+        return f"{flag} {base_name}"
 
     fm_copy = lambda: json.loads(json.dumps(ANTI_TSPU_FINALMASK))
     direct_tls_port = int(getattr(args, "direct_tls_port", 0) or 0)
@@ -1513,6 +1576,80 @@ def _build_xray_json_configs(args: argparse.Namespace) -> list[dict]:
             )
         )
 
+    # 4b. Альтернативные IPv6-маршруты (если у сервера есть внешний IPv6)
+    srv_ipv6 = (getattr(args, "server_ipv6", "") or "").strip()
+    if args.base_domain and srv_ipv6 and args.ya_xhttp_path:
+        docs.append(
+            _wrap_client_xray_doc(
+                _tag("Combain-Direct-XHTTP-IPv6"),
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": srv_ipv6,
+                                "port": 443,
+                                "users": [{"id": args.uuid, "encryption": vless_enc}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "xhttp",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": args.base_domain,
+                            "fingerprint": "chrome",
+                            "alpn": ["h2"],
+                        },
+                        "xhttpSettings": {
+                            "path": f"/{args.ya_xhttp_path.lstrip('/')}",
+                            "host": args.base_domain,
+                            "mode": "stream-one",
+                            "xPaddingBytes": "150-900",
+                            "headers": dict(BROWSER_MASK_HEADERS),
+                            "xmux": json.loads(json.dumps(DIRECT_XHTTP_XMUX)),
+                        },
+                        "finalmask": fm_copy(),
+                    },
+                },
+            )
+        )
+    if args.base_domain and srv_ipv6 and args.ya_ws_path:
+        docs.append(
+            _wrap_client_xray_doc(
+                _tag("Combain-Direct-WS-IPv6"),
+                {
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {
+                        "vnext": [
+                            {
+                                "address": srv_ipv6,
+                                "port": 443,
+                                "users": [{"id": args.uuid, "encryption": vless_enc}],
+                            }
+                        ]
+                    },
+                    "streamSettings": {
+                        "network": "ws",
+                        "security": "tls",
+                        "tlsSettings": {
+                            "serverName": args.base_domain,
+                            "fingerprint": "chrome",
+                            "alpn": ["http/1.1"],
+                        },
+                        "wsSettings": {
+                            "path": f"/{args.ya_ws_path.lstrip('/')}",
+                            "host": args.base_domain,
+                            "headers": dict(BROWSER_MASK_HEADERS),
+                        },
+                        "finalmask": fm_copy(),
+                    },
+                },
+            )
+        )
+
     # 5. Yandex Cloud CDN (если задан)
     if args.ya_cdn_domain and args.ya_ws_path:
         docs.append(
@@ -1581,6 +1718,8 @@ def cmd_export_sub(args: argparse.Namespace) -> int:
 
 def _add_common_link_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--server-ip", required=True)
+    parser.add_argument("--server-ipv6", default="")
+    parser.add_argument("--country", default="")
     parser.add_argument("--base-domain", default="")
     parser.add_argument("--uuid", required=True)
     parser.add_argument("--reality-sni", required=True)

@@ -163,14 +163,19 @@ def cmd_init_node(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args)
     role = args.role
     detected_cc = ""
+    country_code = (getattr(args, "country", "") or "").strip().upper()
     if role == "auto":
         role, detected_cc = detect_role_by_geoip()
+        if not country_code and detected_cc != "UNKNOWN":
+            country_code = detected_cc
     with MeshDB(db_path) as db:
         node = db.upsert_node(
             node_id=args.node_id or db.get_meta("local_node_id") or None,
             name=args.name,
             role=role,
             public_ip=args.public_ip,
+            public_ipv6=getattr(args, "public_ipv6", ""),
+            country_code=country_code,
             mesh_ip=args.mesh_ip,
             base_domain=args.base_domain,
             dns_domain=args.dns_domain,
@@ -598,6 +603,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--name", default="node", help="Human-readable node name")
     p_init.add_argument("--role", choices=("auto", "ru_relay", "exit"), default="auto")
     p_init.add_argument("--public-ip", default="")
+    p_init.add_argument("--public-ipv6", default="")
+    p_init.add_argument("--country", default="")
     p_init.add_argument("--mesh-ip", default="")
     p_init.add_argument("--base-domain", default="")
     p_init.add_argument("--dns-domain", default="")

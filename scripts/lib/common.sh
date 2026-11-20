@@ -86,3 +86,29 @@ print_qr_if_available() {
         echo "$payload" | qrencode -t ANSIUTF8
     fi
 }
+
+# Определение внешнего глобального IPv6 адреса (если поддерживается хостером)
+detect_server_ipv6() {
+    local ipv6=""
+    for url in "https://api6.ipify.org" "https://ifconfig.co"; do
+        ipv6="$(curl -6 -fsSL --max-time 3 "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ "$ipv6" == *:* && "$ipv6" != fe80:* && "$ipv6" != "::1" ]]; then
+            echo "$ipv6"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# Определение 2-буквенного ISO-кода страны сервера (US, DE, NL, RU...) для эмодзи флага в подписке
+detect_server_country() {
+    local cc=""
+    for url in "https://ipinfo.io/country" "https://ifconfig.co/country-iso"; do
+        cc="$(curl -4 -fsSL --max-time 3 "$url" 2>/dev/null | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' || true)"
+        if [[ "$cc" =~ ^[A-Z]{2}$ ]]; then
+            echo "$cc"
+            return 0
+        fi
+    done
+    return 0
+}

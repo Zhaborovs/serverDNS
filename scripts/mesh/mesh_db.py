@@ -107,6 +107,14 @@ class MeshDB:
                 self._conn.execute(
                     "ALTER TABLE nodes ADD COLUMN wg_port INTEGER NOT NULL DEFAULT 51829"
                 )
+            if "public_ipv6" not in node_cols:
+                self._conn.execute(
+                    "ALTER TABLE nodes ADD COLUMN public_ipv6 TEXT NOT NULL DEFAULT ''"
+                )
+            if "country_code" not in node_cols:
+                self._conn.execute(
+                    "ALTER TABLE nodes ADD COLUMN country_code TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.commit()
 
     def close(self) -> None:
@@ -156,6 +164,8 @@ class MeshDB:
         name: str = "",
         role: str = "exit",
         public_ip: str = "",
+        public_ipv6: str = "",
+        country_code: str = "",
         mesh_ip: str = "",
         base_domain: str = "",
         dns_domain: str = "",
@@ -184,14 +194,16 @@ class MeshDB:
                 self._conn.execute(
                     """
                     INSERT INTO nodes (
-                        node_id, name, role, public_ip, mesh_ip, base_domain, dns_domain,
+                        node_id, name, role, public_ip, public_ipv6, country_code, mesh_ip, base_domain, dns_domain,
                         xhttp_path, ws_path, vless_pub_key, awg_port, wg_pubkey, wg_port,
                         status, last_seen, updated_at, deleted
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(node_id) DO UPDATE SET
                         name = excluded.name,
                         role = excluded.role,
                         public_ip = excluded.public_ip,
+                        public_ipv6 = CASE WHEN excluded.public_ipv6 != '' THEN excluded.public_ipv6 ELSE nodes.public_ipv6 END,
+                        country_code = CASE WHEN excluded.country_code != '' THEN excluded.country_code ELSE nodes.country_code END,
                         mesh_ip = excluded.mesh_ip,
                         base_domain = excluded.base_domain,
                         dns_domain = excluded.dns_domain,
@@ -211,6 +223,8 @@ class MeshDB:
                         name,
                         role,
                         public_ip,
+                        str(public_ipv6 or "").strip(),
+                        str(country_code or "").strip().upper(),
                         mesh_ip,
                         base_domain,
                         dns_domain,
@@ -708,16 +722,18 @@ class MeshDB:
             self._conn.execute(
                 """
                 INSERT INTO nodes (
-                    node_id, name, role, public_ip, mesh_ip, base_domain, dns_domain,
+                    node_id, name, role, public_ip, public_ipv6, country_code, mesh_ip, base_domain, dns_domain,
                     xhttp_path, ws_path, vless_pub_key, awg_port, wg_pubkey, wg_port,
                     status, last_seen, updated_at, deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     nid,
                     str(item.get("name") or ""),
                     role,
                     str(item.get("public_ip") or ""),
+                    str(item.get("public_ipv6") or "").strip(),
+                    str(item.get("country_code") or "").strip().upper(),
                     str(item.get("mesh_ip") or ""),
                     str(item.get("base_domain") or ""),
                     str(item.get("dns_domain") or ""),
@@ -745,10 +761,12 @@ class MeshDB:
         merged_seen = max(int(existing["last_seen"]), in_seen)
         merged_wg_pub = str(item.get("wg_pubkey") or "") or str(existing["wg_pubkey"] or "")
         merged_wg_port = int(item.get("wg_port") or 0) or int(existing["wg_port"] or 51829)
+        merged_ipv6 = str(item.get("public_ipv6") or "").strip() or str(existing["public_ipv6"] or "")
+        merged_cc = str(item.get("country_code") or "").strip().upper() or str(existing["country_code"] or "")
         self._conn.execute(
             """
             UPDATE nodes SET
-                name = ?, role = ?, public_ip = ?, mesh_ip = ?, base_domain = ?,
+                name = ?, role = ?, public_ip = ?, public_ipv6 = ?, country_code = ?, mesh_ip = ?, base_domain = ?,
                 dns_domain = ?, xhttp_path = ?, ws_path = ?, vless_pub_key = ?,
                 awg_port = ?, wg_pubkey = ?, wg_port = ?, status = ?, last_seen = ?,
                 updated_at = ?, deleted = ?
@@ -758,6 +776,8 @@ class MeshDB:
                 str(item.get("name") or ""),
                 role,
                 str(item.get("public_ip") or ""),
+                merged_ipv6,
+                merged_cc,
                 str(item.get("mesh_ip") or ""),
                 str(item.get("base_domain") or ""),
                 str(item.get("dns_domain") or ""),

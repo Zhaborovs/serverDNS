@@ -244,6 +244,15 @@ def _wrap_client_xray_doc(
     }
 
 
+def _country_to_flag(country_code: str, role: str = "") -> str:
+    cc = (country_code or "").strip().upper()
+    if not cc and role == "ru_relay":
+        cc = "RU"
+    if len(cc) == 2 and cc.isascii() and cc.isalpha():
+        return chr(0x1F1E6 + ord(cc[0]) - ord("A")) + chr(0x1F1E6 + ord(cc[1]) - ord("A"))
+    return "🌐"
+
+
 def _node_label(node: dict[str, Any]) -> str:
     name = str(node.get("name") or "").strip()
     domain = str(node.get("base_domain") or "").strip()
@@ -256,7 +265,7 @@ def build_xray_json_subscription(
     user: dict[str, Any],
     healthy_nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Generate multi-node Xray JSON array for all healthy mesh nodes."""
+    """Generate multi-node Xray JSON array for all healthy mesh nodes (with country flags & IPv6 fallback)."""
     ru_rules = get_ru_bypass_routing_rules()
     docs: list[dict[str, Any]] = []
     client_uuid = str(user["uuid"])
@@ -265,85 +274,92 @@ def build_xray_json_subscription(
         domain = str(node.get("base_domain") or "").strip()
         if not domain:
             continue
+        flag = _country_to_flag(str(node.get("country_code") or ""), str(node.get("role") or ""))
         label = _node_label(node)
         vless_enc = build_vless_encryption(str(node.get("vless_pub_key") or ""))
         xhttp_path = str(node.get("xhttp_path") or "").strip()
         ws_path = str(node.get("ws_path") or "").strip()
+        ipv6 = str(node.get("public_ipv6") or "").strip()
 
-        if xhttp_path:
-            docs.append(
-                _wrap_client_xray_doc(
-                    f"Combain-Direct-XHTTP [{label}]",
-                    {
-                        "tag": "proxy",
-                        "protocol": "vless",
-                        "settings": {
-                            "vnext": [
-                                {
-                                    "address": domain,
-                                    "port": 443,
-                                    "users": [{"id": client_uuid, "encryption": vless_enc}],
-                                }
-                            ]
-                        },
-                        "streamSettings": {
-                            "network": "xhttp",
-                            "security": "tls",
-                            "tlsSettings": {
-                                "serverName": domain,
-                                "fingerprint": "chrome",
-                                "alpn": ["h2"],
-                            },
-                            "xhttpSettings": {
-                                "path": f"/{xhttp_path.lstrip('/')}",
-                                "host": domain,
-                                "mode": "stream-one",
-                                "xPaddingBytes": "150-900",
-                                "headers": dict(BROWSER_MASK_HEADERS),
-                                "xmux": json.loads(json.dumps(DIRECT_XHTTP_XMUX)),
-                            },
-                            "finalmask": json.loads(json.dumps(ANTI_TSPU_FINALMASK)),
-                        },
-                    },
-                    ru_rules,
-                )
-            )
+        endpoints = [(domain, "")]
+        if ipv6:
+            endpoints.append((ipv6, "-IPv6"))
 
-        if ws_path:
-            docs.append(
-                _wrap_client_xray_doc(
-                    f"Combain-Direct-WS [{label}]",
-                    {
-                        "tag": "proxy",
-                        "protocol": "vless",
-                        "settings": {
-                            "vnext": [
-                                {
-                                    "address": domain,
-                                    "port": 443,
-                                    "users": [{"id": client_uuid, "encryption": vless_enc}],
-                                }
-                            ]
-                        },
-                        "streamSettings": {
-                            "network": "ws",
-                            "security": "tls",
-                            "tlsSettings": {
-                                "serverName": domain,
-                                "fingerprint": "chrome",
-                                "alpn": ["http/1.1"],
+        for addr, suffix in endpoints:
+            if xhttp_path:
+                docs.append(
+                    _wrap_client_xray_doc(
+                        f"{flag} Combain-Direct-XHTTP{suffix} [{label}]",
+                        {
+                            "tag": "proxy",
+                            "protocol": "vless",
+                            "settings": {
+                                "vnext": [
+                                    {
+                                        "address": addr,
+                                        "port": 443,
+                                        "users": [{"id": client_uuid, "encryption": vless_enc}],
+                                    }
+                                ]
                             },
-                            "wsSettings": {
-                                "path": f"/{ws_path.lstrip('/')}",
-                                "host": domain,
-                                "headers": dict(BROWSER_MASK_HEADERS),
+                            "streamSettings": {
+                                "network": "xhttp",
+                                "security": "tls",
+                                "tlsSettings": {
+                                    "serverName": domain,
+                                    "fingerprint": "chrome",
+                                    "alpn": ["h2"],
+                                },
+                                "xhttpSettings": {
+                                    "path": f"/{xhttp_path.lstrip('/')}",
+                                    "host": domain,
+                                    "mode": "stream-one",
+                                    "xPaddingBytes": "150-900",
+                                    "headers": dict(BROWSER_MASK_HEADERS),
+                                    "xmux": json.loads(json.dumps(DIRECT_XHTTP_XMUX)),
+                                },
+                                "finalmask": json.loads(json.dumps(ANTI_TSPU_FINALMASK)),
                             },
-                            "finalmask": json.loads(json.dumps(ANTI_TSPU_FINALMASK)),
                         },
-                    },
-                    ru_rules,
+                        ru_rules,
+                    )
                 )
-            )
+
+            if ws_path:
+                docs.append(
+                    _wrap_client_xray_doc(
+                        f"{flag} Combain-Direct-WS{suffix} [{label}]",
+                        {
+                            "tag": "proxy",
+                            "protocol": "vless",
+                            "settings": {
+                                "vnext": [
+                                    {
+                                        "address": addr,
+                                        "port": 443,
+                                        "users": [{"id": client_uuid, "encryption": vless_enc}],
+                                    }
+                                ]
+                            },
+                            "streamSettings": {
+                                "network": "ws",
+                                "security": "tls",
+                                "tlsSettings": {
+                                    "serverName": domain,
+                                    "fingerprint": "chrome",
+                                    "alpn": ["http/1.1"],
+                                },
+                                "wsSettings": {
+                                    "path": f"/{ws_path.lstrip('/')}",
+                                    "host": domain,
+                                    "headers": dict(BROWSER_MASK_HEADERS),
+                                },
+                                "finalmask": json.loads(json.dumps(ANTI_TSPU_FINALMASK)),
+                            },
+                        },
+                        ru_rules,
+                    )
+                )
 
     return docs
 
@@ -355,9 +371,12 @@ def _build_vless_uri(
     params: dict[str, str],
     name: str,
 ) -> str:
+    host = address.strip()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     qs = urllib.parse.urlencode(params, safe="")
     frag = urllib.parse.quote(name, safe="")
-    return f"vless://{client_uuid}@{address}:{port}?{qs}#{frag}"
+    return f"vless://{client_uuid}@{host}:{port}?{qs}#{frag}"
 
 
 def build_vless_base64_subscription(
@@ -368,67 +387,65 @@ def build_vless_base64_subscription(
     uris: list[str] = []
     client_uuid = str(user["uuid"])
     fm_json = json.dumps(ANTI_TSPU_FINALMASK, separators=(",", ":"))
-    xhttp_extra = json.dumps(
-        {
-            "xPaddingBytes": "150-900",
-            "headers": dict(BROWSER_MASK_HEADERS),
-            "xmux": DIRECT_XHTTP_XMUX,
-        },
-        separators=(",", ":"),
-    )
 
     for node in healthy_nodes:
         domain = str(node.get("base_domain") or "").strip()
         if not domain:
             continue
+        flag = _country_to_flag(str(node.get("country_code") or ""), str(node.get("role") or ""))
         label = _node_label(node)
         vless_enc = build_vless_encryption(str(node.get("vless_pub_key") or ""))
         xhttp_path = str(node.get("xhttp_path") or "").strip()
         ws_path = str(node.get("ws_path") or "").strip()
+        ipv6 = str(node.get("public_ipv6") or "").strip()
 
-        if xhttp_path:
-            uris.append(
-                _build_vless_uri(
-                    client_uuid,
-                    domain,
-                    443,
-                    {
-                        "encryption": vless_enc,
-                        "type": "xhttp",
-                        "security": "tls",
-                        "sni": domain,
-                        "host": domain,
-                        "fp": "chrome",
-                        "alpn": "h2",
-                        "mode": "stream-one",
-                        "path": f"/{xhttp_path.lstrip('/')}",
-                        "extra": xhttp_extra,
-                        "fm": fm_json,
-                    },
-                    f"Combain-Direct-XHTTP [{label}]",
-                )
-            )
+        endpoints = [(domain, "")]
+        if ipv6:
+            endpoints.append((ipv6, "-IPv6"))
 
-        if ws_path:
-            uris.append(
-                _build_vless_uri(
-                    client_uuid,
-                    domain,
-                    443,
-                    {
-                        "encryption": vless_enc,
-                        "type": "ws",
-                        "security": "tls",
-                        "sni": domain,
-                        "host": domain,
-                        "fp": "chrome",
-                        "alpn": "http/1.1",
-                        "path": f"/{ws_path.lstrip('/')}",
-                        "fm": fm_json,
-                    },
-                    f"Combain-Direct-WS [{label}]",
+        for addr, suffix in endpoints:
+            if xhttp_path:
+                uris.append(
+                    _build_vless_uri(
+                        client_uuid,
+                        addr,
+                        443,
+                        {
+                            "encryption": vless_enc,
+                            "type": "xhttp",
+                            "security": "tls",
+                            "sni": domain,
+                            "host": domain,
+                            "fp": "chrome",
+                            "alpn": "h2",
+                            "mode": "stream-one",
+                            "path": f"/{xhttp_path.lstrip('/')}",
+                            "fm": fm_json,
+                        },
+                        f"{flag} Combain-Direct-XHTTP{suffix} [{label}]",
+                    )
                 )
-            )
+
+            if ws_path:
+                uris.append(
+                    _build_vless_uri(
+                        client_uuid,
+                        addr,
+                        443,
+                        {
+                            "encryption": vless_enc,
+                            "type": "ws",
+                            "security": "tls",
+                            "sni": domain,
+                            "host": domain,
+                            "fp": "chrome",
+                            "alpn": "http/1.1",
+                            "path": f"/{ws_path.lstrip('/')}",
+                            "fm": fm_json,
+                        },
+                        f"{flag} Combain-Direct-WS{suffix} [{label}]",
+                    )
+                )
 
     return base64.b64encode("\n".join(uris).encode("utf-8")).decode("ascii")
 

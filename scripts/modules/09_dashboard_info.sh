@@ -18,6 +18,8 @@ _dashboard_export_xray_links() {
     fi
     python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" export-links \
         --server-ip "$cur_ip" \
+        --server-ipv6 "${SERVER_IPV6:-}" \
+        --country "${SERVER_COUNTRY:-}" \
         --base-domain "${BASE_DOMAIN:-}" \
         --uuid "${MAIN_CLIENT_UUID}" \
         --reality-sni "${REALITY_SNI:-sun9-73.userapi.com}" \

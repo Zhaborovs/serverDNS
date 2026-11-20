@@ -121,6 +121,16 @@ mod_xray_update_subscription() {
     [[ -z "${SUB_TOKEN:-}" ]] && state_set "SUB_TOKEN" "$(gen_random_str 20)"
 
     local cur_ip="${SERVER_IP:-$(detect_server_ip)}"
+    local cur_ipv6="${SERVER_IPV6:-}"
+    if [[ -z "$cur_ipv6" ]] && declare -f detect_server_ipv6 >/dev/null 2>&1; then
+        cur_ipv6="$(detect_server_ipv6 || true)"
+        [[ -n "$cur_ipv6" ]] && state_set "SERVER_IPV6" "$cur_ipv6"
+    fi
+    local cur_cc="${SERVER_COUNTRY:-}"
+    if [[ -z "$cur_cc" ]] && declare -f detect_server_country >/dev/null 2>&1; then
+        cur_cc="$(detect_server_country || true)"
+        [[ -n "$cur_cc" ]] && state_set "SERVER_COUNTRY" "$cur_cc"
+    fi
     local sub_file="${STATE_DIR}/nginx/conf.d/sub_payload.b64"
     local sub_json_file="${STATE_DIR}/nginx/conf.d/sub_payload.json"
     local extra_file="${STATE_DIR}/extra_sub_links.list"
@@ -128,6 +138,8 @@ mod_xray_update_subscription() {
 
     python3 "${PROJECT_ROOT}/scripts/py_helpers/xui_db_manager.py" export-sub \
         --server-ip "$cur_ip" \
+        --server-ipv6 "$cur_ipv6" \
+        --country "$cur_cc" \
         --base-domain "${BASE_DOMAIN:-}" \
         --uuid "${MAIN_CLIENT_UUID}" \
         --reality-sni "${REALITY_SNI:-www.microsoft.com}" \

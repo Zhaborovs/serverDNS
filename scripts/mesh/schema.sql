@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     name TEXT NOT NULL DEFAULT '',
     role TEXT NOT NULL CHECK(role IN ('ru_relay', 'exit')),
     public_ip TEXT NOT NULL DEFAULT '',
+    public_ipv6 TEXT NOT NULL DEFAULT '',
+    country_code TEXT NOT NULL DEFAULT '',
     mesh_ip TEXT NOT NULL DEFAULT '',
     base_domain TEXT NOT NULL DEFAULT '',
     dns_domain TEXT NOT NULL DEFAULT '',

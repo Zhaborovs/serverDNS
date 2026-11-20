@@ -22,6 +22,7 @@ listener 0.0.0.0:443 {
     proto tls
     table combain_sni
 }
+${IPV6_LISTENER_BLOCK}
 
 table combain_sni {
     # 1. Домен AdGuard Home (через Nginx vhost -> 127.0.0.1:8444, защита от HTTP/2 Coalescing)

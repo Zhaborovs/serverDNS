@@ -109,13 +109,31 @@ mod_sniproxy_sync_domains() {
     geo_rules+="    .*gstatic\\.com\$ *:443"$'\n'
     geo_rules+="    .*microsoft\\.com\$ *:443"$'\n'
 
+    # Проверяем наличие внешнего IPv6 и при наличии включаем dual-stack слушатель [::]:443
+    local srv_ipv6="${SERVER_IPV6:-}"
+    if [[ -z "$srv_ipv6" ]] && declare -f detect_server_ipv6 >/dev/null 2>&1; then
+        srv_ipv6="$(detect_server_ipv6 || true)"
+        [[ -n "$srv_ipv6" ]] && state_set "SERVER_IPV6" "$srv_ipv6"
+    fi
+    local ipv6_listener_block=""
+    if [[ -n "$srv_ipv6" ]]; then
+        ipv6_listener_block=$'\n'"listener [::]:443 {"$'\n'"    proto tls"$'\n'"    table combain_sni"$'\n'"}"
+        # Разрешаем 443/tcp и ICMPv6 в ip6tables (без сброса существующих правил)
+        if command -v ip6tables >/dev/null 2>&1; then
+            ip6tables -C INPUT -p ipv6-icmp -j ACCEPT 2>/dev/null || ip6tables -I INPUT 1 -p ipv6-icmp -j ACCEPT 2>/dev/null || true
+            ip6tables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || ip6tables -I INPUT 1 -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+        fi
+    else
+        ipv6_listener_block=$'\n'"# IPv6 не обнаружен на этом сервере (только 0.0.0.0:443)"
+    fi
+
     # Безопасная сборка /etc/sniproxy.conf через python для точной подстановки многострочных блоков
     python3 - "${PROJECT_ROOT}/templates/sniproxy.conf.tpl" "/etc/sniproxy.conf" \
-        "$base_regex" "$nginx_port" "$base_target_port" "$dns_rules" "$whitelist_rules" "$geo_rules" <<'PYEOF'
+        "$base_regex" "$nginx_port" "$base_target_port" "$dns_rules" "$whitelist_rules" "$geo_rules" "$ipv6_listener_block" <<'PYEOF'
 import sys
 from pathlib import Path
 
-tpl_path, out_path, base_rx, nginx_port, base_target_port, dns_rules, wl_rules, geo_rules = sys.argv[1:]
+tpl_path, out_path, base_rx, nginx_port, base_target_port, dns_rules, wl_rules, geo_rules, ipv6_block = sys.argv[1:]
 content = Path(tpl_path).read_text(encoding="utf-8")
 content = (
     content.replace("${BASE_DOMAIN_REGEX}", base_rx)
@@ -124,6 +142,7 @@ content = (
     .replace("${DNS_DOMAIN_RULES}", dns_rules.rstrip())
     .replace("${WHITELIST_SNI_RULES}", wl_rules.rstrip())
     .replace("${GEO_DOMAIN_RULES}", geo_rules.rstrip())
+    .replace("${IPV6_LISTENER_BLOCK}", ipv6_block.rstrip())
 )
 Path(out_path).write_text(content, encoding="utf-8")
 PYEOF

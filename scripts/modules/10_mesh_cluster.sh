@@ -262,6 +262,8 @@ mod_mesh_init_node() {
         --wg-port "${in_wg_port}"
     )
     [[ -n "$wg_pub" ]] && init_args+=(--wg-pubkey "$wg_pub")
+    [[ -n "${SERVER_IPV6:-}" ]] && init_args+=(--public-ipv6 "${SERVER_IPV6}")
+    [[ -n "${SERVER_COUNTRY:-}" ]] && init_args+=(--country "${SERVER_COUNTRY}")
     [[ -n "${BASE_DOMAIN:-}" ]] && init_args+=(--base-domain "${BASE_DOMAIN}")
     [[ -n "${DNS_DOMAIN:-}" ]]  && init_args+=(--dns-domain "${DNS_DOMAIN}")
     [[ -n "${XHTTP_YA_PATH:-}" ]] && init_args+=(--xhttp-path "${XHTTP_YA_PATH}")
@@ -607,6 +609,8 @@ mod_mesh_join_by_invite() {
         --wg-port "${MESH_WG_PORT:-51829}"
     )
     [[ -n "$wg_pub" ]] && init_args+=(--wg-pubkey "$wg_pub")
+    [[ -n "${SERVER_IPV6:-}" ]] && init_args+=(--public-ipv6 "${SERVER_IPV6}")
+    [[ -n "${SERVER_COUNTRY:-}" ]] && init_args+=(--country "${SERVER_COUNTRY}")
     [[ -n "${BASE_DOMAIN:-}" ]] && init_args+=(--base-domain "${BASE_DOMAIN}")
     [[ -n "${DNS_DOMAIN:-}" ]]  && init_args+=(--dns-domain "${DNS_DOMAIN}")
     [[ -n "${XHTTP_YA_PATH:-}" ]] && init_args+=(--xhttp-path "${XHTTP_YA_PATH}")
